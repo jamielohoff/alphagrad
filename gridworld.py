@@ -15,7 +15,6 @@ class GridworldState:
     """
     t: chex.Array
     position: chex.Array
-    surroundings: chex.Array
     moves: chex.Array
 
 

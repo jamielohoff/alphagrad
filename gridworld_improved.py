@@ -49,10 +49,6 @@ class GridworldGame2D:
         direction = self.move_map[action]        
         new_i = position[0] + direction[0]
         new_j = position[1] + direction[1]
-                
-        reward, new_i, new_j = lax.cond(self.walls[new_i.astype(jnp.int32), new_j.astype(jnp.int32)] == 1,
-                                lambda: (-0.75, position[0], position[1]),
-                                lambda: (-0.05, new_i, new_j))
         
         reward = lax.cond(moves[new_i.astype(jnp.int32), new_j.astype(jnp.int32)] > 0,
                                 lambda: -0.25,
@@ -84,43 +80,48 @@ class GridworldGame2D:
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jrand.PRNGKey) -> chex.Array:
         idx = jrand.randint(key, (1,), 0, self.num_starting_positions)[0]
-        i, j = self.starting_positions[idx].astype(jnp.int32)
+        start = self.starting_positions[idx]
+
+        i, j = start.astype(jnp.int32)
         moves = jnp.zeros_like(self.walls)
         moves = moves.at[i, j].set(1.)
-        return GridworldState(t=0, position=self.starting_positions[idx], moves=moves)
+        return GridworldState(t=0, position=start, moves=moves)
     
     @partial(jax.jit, static_argnums=(0,))
     def get_obs(self, moves: chex.Array):
-        obs = jnp.zeros_like(self.walls)
-        obs = obs.at[:, :].set(moves)
-        return jnp.ravel(obs)
+        return jnp.ravel(moves)
     
     @partial(jax.jit, static_argnums=(0,))
-    def get_surroundings(self, position):
+    def get_mask(self, position: chex.Array):
         i, j = position.astype(jnp.int32)
-        top = self.walls.at[].get()
+
+        top = self.walls.at[i-1, j].get()
+        right = self.walls.at[i, j+1].get()
+        bottom = self.walls.at[i+1, j].get()
+        left = self.walls.at[i, j-1].get()
+
         return jnp.array([top, right, bottom, left])
     
     def num_actions(self):
         return len(self.move_map)
 
-key = jrand.PRNGKey(123)
-goal = jnp.array([0, 4])
-walls = jnp.array( [[0, 1, 0, 1, 0],
-                    [0, 1, 0, 1, 0],
-                    [0, 0, 0, 1, 0],
-                    [0, 1, 0, 1, 0],
-                    [0, 0, 0, 0, 0]])  
+# key = jrand.PRNGKey(42)
+# goal = jnp.array([0, 4])
+# walls = jnp.array( [[0, 1, 0, 1, 0],
+#                     [0, 1, 0, 1, 0],
+#                     [0, 0, 0, 1, 0],
+#                     [0, 1, 0, 1, 0],
+#                     [0, 0, 0, 0, 0]])  
 
-env = GridworldGame2D(walls, goal)
-state = env.reset(key)
-print(env.walls)
+# env = GridworldGame2D(walls, goal)
+# state = env.reset(key)
+# print(state.position, env.get_mask(state.position))
 
-state, obs, rew, done = env.step(state, 1)
-print(obs, state, rew)
-state, obs, rew, done = env.step(state, 2)
-print(obs, state, rew)
-state, obs, rew, done = env.step(state, 2)
-print(obs, state)
+# state, obs, rew, done = env.step(state, 1)
+# print(obs, state, rew)
+# state, obs, rew, done = env.step(state, 2)
+# print(obs, state, rew)
+# state, obs, rew, done = env.step(state, 2)
+# print(obs, state)
 
     

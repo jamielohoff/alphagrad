@@ -112,7 +112,7 @@ def rollout(policy_network, init_states, init_obs, key):
 		state, obs, key = carry
 		subkey, key = jrand.split(key, 2)
 		output = policy_network(obs)
-		policy_logits = output[:, 1:]
+		policy_logits = jnp.ones(4) # output[:, 1:]
 		actions = jrand.categorical(subkey, policy_logits)
 		next_state, next_obs, reward, _ = batched_step(state, actions)
 
