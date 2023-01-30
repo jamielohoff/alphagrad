@@ -1,7 +1,10 @@
 import os
 import copy
 import time
+import argparse
 import functools as ft
+
+import wandb
 from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,9 +15,7 @@ import jax.numpy as jnp
 import jax.random as jrand
 import jax.tree_util as jtu
 
-import chex
 import equinox as eqx
-import rlax
 import optax
 
 from graphax.game import VertexGame
@@ -25,37 +26,79 @@ from graphax.examples.helmholtz import construct_Helmholtz
 from replay_memory import ReplayMemory
 
 
-os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-os.environ['CUDA_VISIBLE_DEVICES'] = str(1)
+parser = argparse.ArgumentParser()
+parser.add_argument("--name", type=str, 
+                    default="Maze_DQN_test", help="Name of the experiment.")
 
-key = jrand.PRNGKey(123)
-EPISODES = 250
-LR = 1e-3
-BATCHSIZE = 64
-REPLAY_SIZE = 512
-EPS = .75 # the higher the more exploration
-NINPUTS = 20
-NINTERMEDIATES = 50
-NOUTPUTS = 2
-UPDATE_FREQUENCY = 5
-GAMMA = .9
+parser.add_argument("--gpu", type=str, 
+                    default="0", help="GPU identifier.")
 
-GS, nedges = construct_random_graph(NINPUTS, NINTERMEDIATES, NOUTPUTS, key)
+parser.add_argument("--seed", type=int,
+                    default=123, help="Random seed.")
+
+parser.add_argument("--episodes", type=int, 
+                    default=150, help="Number of runs on random data.")
+
+parser.add_argument("--replay_size", type=int, 
+                    default=2048, help="Size of the replay buffer.")
+
+parser.add_argument("--rollout_length", type=int, default=50, 
+                    help="Duration of the rollout phase of the MCTS algorithm.")
+
+parser.add_argument("--batchsize", type=int, 
+                    default=256, help="Learning batchsize.")
+
+parser.add_argument("--rollout_batchsize", type=int,
+                    default=16, 
+                    help="Batchsize for environment interaction.")
+
+parser.add_argument("--update_frequency", type=int, 
+                    default=0., help="Update frequency of the target network.")
+
+parser.add_argument("--lr", type=float, 
+                    default=1e-2, help="Learning rate.")
+
+parser.add_argument("--gamma", type=float, 
+                    default=.99, help="Discount rate.")
+
+parser.add_argument("--eps", type=float, 
+                    default=.75, help="Initial exploration rate for epsilon-greedy.")
+
+args = parser.parse_args()
+
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+
+wandb.init("Maze_DQN")
+wandb.run.name = args.name
+wandb.config = vars(args)
+
+key = jrand.PRNGKey(args.seed)
 
 # create a replay buffer
-replay_buffer = ReplayMemory(REPLAY_SIZE)
+replay_buffer = ReplayMemory(args.replay_size)
+
+NUM_INPUTS = args.num_inputs
+NUM_INTERMEDIATES = args.num_intermediates
+NUM_OUTPUTS = args.num_outputs
+EPS = args.eps
+
+key = jrand.PRNGKey(args.seed)
+GS = construct_Helmholtz()
+
 
 forward_gs = copy.deepcopy(GS)
-_, ops = forward(forward_gs, nedges, NINTERMEDIATES, NINPUTS)
+_, ops = forward(forward_gs, GS.get_info())
 print("forward-mode:", ops)
 
+
 reverse_gs = copy.deepcopy(GS)
-_, ops = reverse(reverse_gs, nedges, NINTERMEDIATES, NINPUTS)
+_, ops = reverse(reverse_gs, GS.get_info())
 print("reverse-mode:", ops)
 
-env = VertexGame(GS, nedges, NINPUTS, NINTERMEDIATES, NOUTPUTS)
+env = VertexGame(GS)
 
-q_net = eqx.nn.MLP(NINTERMEDIATES, NINTERMEDIATES, 256, 2, key=key)
+q_net = eqx.nn.MLP(15*15, 12, 64, 3, key=key)
 target_net = copy.deepcopy(q_net)
 
 
@@ -64,7 +107,7 @@ def get_action(model, obs, key):
     eps_key, sample_key = jrand.split(key, 2)
     rn = jrand.uniform(eps_key, (1,))[0]
     q = model(obs, key=key)
-    masked_q = jnp.where(jnp.less(obs, 1.), q, -500.)
+    masked_q = jnp.where(jnp.less(obs, 1.), q, -100000.)
     action = lax.cond(rn > EPS, 
                     lambda q: jnp.argmax(q),
                     lambda q: jrand.categorical(sample_key, logits=q),
@@ -119,7 +162,7 @@ def calc_loss(q_model,
     
     def q_values_next(q_values):
         q_values_next = predict(target_model, next_state, keys[1])
-        rew = reward + GAMMA*q_values_next.max()
+        rew = reward + args.gamma*q_values_next.max()
         return q_values.at[action].set(rew)
     
     q_target = lax.cond(done, 
@@ -134,7 +177,7 @@ def calc_loss(q_model,
 
 @eqx.filter_value_and_grad
 def loss_and_grad(q_model, target_model, samples, key):
-    keys = jrand.split(key, BATCHSIZE)
+    keys = jrand.split(key, args.batchsize)
     states, actions, next_states, rewards, dones = samples
     loss_batch = calc_loss(q_model, 
                         target_model, 
@@ -156,25 +199,25 @@ def train(q_model, target_model, optim, opt_state, samples, key):
 
 
 start = time.time()
-initialize_replay_buffer(q_net, REPLAY_SIZE, key)
+initialize_replay_buffer(q_net, args.replay_size, key)
 end = time.time()
 print(end - start, "buffer init time")
 
 
 # optimizer
-optim = optax.adam(LR)
+optim = optax.adam(args.lr)
 opt_state = optim.init(eqx.filter(q_net, eqx.is_inexact_array))
 
 # Main training loop
 losses_list, reward_list, episode_len_list, epsilon_list  = [], [], [], []
 
-pbar = tqdm(range(EPISODES))
+pbar = tqdm(range(args.episodes))
 for episode in pbar:
-    if episode % UPDATE_FREQUENCY == 0:
+    if episode % args.update_frequency == 0:
         # copy params from q_net pytree
         target_net = jtu.tree_map(lambda x: x, q_net)
 
-    gs = env.reset()
+    gs = env.reset(key)
     done, losses, ep_len, rew = False, 0., 0, 0.
     # TODO this way, the agent plays exactly one game!
     while not done:
@@ -190,7 +233,7 @@ for episode in pbar:
         gs = next_gs
         rew += reward
         
-        samples = replay_buffer.sample(BATCHSIZE)
+        samples = replay_buffer.sample(args.batchsize)
         
         q_net, opt_state, loss = train(q_net, target_net, optim, opt_state, samples, key)
         losses += loss 
