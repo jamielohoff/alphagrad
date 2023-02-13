@@ -26,6 +26,7 @@ from graphax.examples.helmholtz import construct_Helmholtz
 from graphax.examples.lif import construct_LIF
 
 from alphazero import A0_loss, get_masked_logits, MCTSReplayMemory
+from resnet import ResNet
 
 
 parser = argparse.ArgumentParser()
@@ -103,16 +104,19 @@ env = VertexGame(GS)
 nn_key, key = jrand.split(key, 2)
 subkeys = jrand.split(nn_key, 4)
 
-NN = eqx.nn.Sequential([eqx.nn.Conv2d(1, 16, 7, key=subkeys[0]),
-                        eqx.nn.Lambda(jnn.relu),
+# NN = eqx.nn.Sequential([eqx.nn.Conv2d(1, 16, 7, key=subkeys[0]),
+#                         eqx.nn.Lambda(jnn.relu),
                         
-                        eqx.nn.Conv2d(16, 32, 7, key=subkeys[1]),
-                        eqx.nn.Lambda(jnn.relu),
+#                         eqx.nn.Conv2d(16, 32, 7, key=subkeys[1]),
+#                         eqx.nn.Lambda(jnn.relu),
                         
-                        eqx.nn.Lambda(jnp.ravel),
-                        eqx.nn.Linear(288, 64, key=subkeys[2]),
-                        eqx.nn.Lambda(jnn.relu),
-                        eqx.nn.Linear(64, NUM_INTERMEDIATES+1, key=subkeys[3])])
+#                         eqx.nn.Lambda(jnp.ravel),
+#                         eqx.nn.Linear(288, 64, key=subkeys[2]),
+#                         eqx.nn.Lambda(jnn.relu),
+#                         eqx.nn.Linear(64, NUM_INTERMEDIATES+1, key=subkeys[3])])
+
+
+NN = ResNet(12, num_classes=NUM_INTERMEDIATES+1, key=nn_key)
 
 
 batched_step = jax.vmap(env.step)
@@ -203,19 +207,24 @@ def preprocess_data(data, idx=0):
     val = final_rew - rew
     return data.at[:, idx].set(val)
 
+
 @jax.jit
 def generate_batch(keys):
 	batchsize = keys.shape[0]
 	info = jnp.tile(GS.info, batchsize).reshape(batchsize, -1)
 	state = jnp.zeros((batchsize, NUM_INTERMEDIATES))
 
+	key = jrand.PRNGKey(123)
+	keylist = jrand.split(key, batchsize)
+
 	def loop_fn(_, key):
 		fraction = jrand.uniform(key, (1,))[0]
 		gs = construct_random_graph(NUM_INPUTS, NUM_INTERMEDIATES, NUM_OUTPUTS, key, fraction=fraction)
 		return _, gs.edges
 
-	_, edges = lax.scan(loop_fn, None, keys, length=batchsize)
+	_, edges = lax.scan(loop_fn, None, keylist, length=batchsize)
 
+	edges = jrand.permutation(keys[0], edges, axis=0, independent=True)
 	return GraphState(info=info, edges=edges, state=state)
 
 
