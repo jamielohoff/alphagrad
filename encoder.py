@@ -45,7 +45,6 @@ class EncoderLayer(eqx.Module):
                                                     in_dim, 
                                                     key=keys[0],
                                                     **kwargs)
-        
         self.attn_norm = eqx.nn.LayerNorm(in_dim)
         self.attn_dropout = eqx.nn.Dropout(p=dropout)
         
@@ -61,7 +60,6 @@ class EncoderLayer(eqx.Module):
                                     use_bias=use_bias, 
                                     key=keys[2])
         self.ff_layer2 = jax.vmap(ff_layer2, in_axes=(0,))
-        
 
         self.ff_norm = eqx.nn.LayerNorm(in_dim)
         self.ff_dropout = eqx.nn.Dropout(p=dropout)

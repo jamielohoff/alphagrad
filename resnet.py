@@ -12,9 +12,9 @@ import equinox as eqx
 class ResidualBlock(eqx.Module):
     """Add docstring
     """
-    layers: Sequence[chex.Array]
+    layers: Sequence[eqx.Module]
 
-    def __init__(self, *layers: chex.Array) -> None:
+    def __init__(self, *layers: eqx.Module) -> None:
         super().__init__()
         self.layers = layers
 
@@ -23,6 +23,7 @@ class ResidualBlock(eqx.Module):
         for layer in self.layers:
             y = layer(y)
         return x + y
+
 
 class ResNet(eqx.Module):
     """Add docstring
