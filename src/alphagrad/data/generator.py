@@ -7,8 +7,20 @@ import jax.random as jrand
 
 import chex
 
-from graphax.graph import GraphState
-from graphax.examples.random import construct_random_graph
+from graphax import GraphInfo, VertexGameState
+from graphax.examples import construct_random
+
+
+def to_jnp(info: GraphInfo) -> chex.Array:
+    return jnp.array([*info])
+
+
+def expand(edges: chex.Array, info: GraphInfo) -> chex.Array:
+    padding = ((0, info.num_intermediates-1), (0, 0), (0, 0))
+    return jnp.pad(edges[jnp.newaxis, :, :], 
+                            pad_width=padding, 
+                            mode="constant", 
+                            constant_values=0)
 
 
 class VertexGameGenerator:
@@ -16,12 +28,12 @@ class VertexGameGenerator:
     TODO add documentation
     """
     game_idxs: chex.Array
-    info_repository: Sequence[chex.Array]
+    info_repository: Sequence[GraphInfo]
     edge_repository: Sequence[chex.Array]
     
     def __init__(self, 
                 num_games: int, 
-                info: chex.Array, 
+                info: GraphInfo, 
                 key: chex.PRNGKey = None) -> None:
         """initializes a fixed repository of possible vertex games
 
@@ -33,21 +45,21 @@ class VertexGameGenerator:
         Returns:
             _type_: _description_
         """
-        self.game_idxs = jnp.arange(num_games, dtype=jnp.int32)
-        num_x, num_v, num_y, _, _ = info
-        
+        self.game_idxs = jnp.arange(num_games, dtype=jnp.int32)       
         self.info_repository = []
         self.edge_repository = []
         
         keys = jrand.split(key, num_games)
         for key in keys:
             fraction = jrand.uniform(key)
-            gs = construct_random_graph(num_x, num_v, num_y, key, fraction=fraction)
-            self.info_repository.append(gs.info)
-            self.edge_repository.append(gs.edges)
+            edges, info = construct_random(key, info, fraction=fraction)
+            self.info_repository.append(info)
+            self.edge_repository.append(edges)
 
     # TODO maybe implement as iterable?
-    def __call__(self, batchsize: int, key: chex.PRNGKey = None) -> GraphState:
+    def __call__(self, 
+                batchsize: int, 
+                key: chex.PRNGKey = None) -> VertexGameState:
         """Samples from the repository of possible games
 
         Args:
@@ -57,13 +69,12 @@ class VertexGameGenerator:
             Any: _description_
         """
         idxs = jrand.choice(key, self.game_idxs, shape=(batchsize,))
-        info = jnp.stack([self.info_repository[idx] for idx in idxs])
-        edges = jnp.stack([self.edge_repository[idx] for idx in idxs])
-        state = jnp.zeros((batchsize, self.info_repository[0][1]))
-        return GraphState(info=info, edges=edges, state=state)
-
-key = jrand.PRNGKey(1337)
-gen = VertexGameGenerator(16, jnp.array([4, 11, 4, 20, 0]), key=key)  
-print(gen(8, key).edges) 
-print(gen(8, key).info)
+        ts = jnp.zeros(batchsize)
+        infos = jnp.stack([to_jnp(self.info_repository[idx]) for idx in idxs])
+        edges = jnp.stack([expand(self.edge_repository[idx], self.info_repository[idx]) for idx in idxs])
+        vertices = jnp.zeros((batchsize, self.info_repository[0][1]))
+        return VertexGameState(t=ts,
+                               info=infos,
+                               edges=edges,
+                               vertices=vertices)
 

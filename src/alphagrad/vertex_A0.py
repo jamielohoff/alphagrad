@@ -25,10 +25,10 @@ from graphax.examples.random import construct_random_graph
 from graphax.examples.helmholtz import construct_Helmholtz
 from graphax.examples.lif import construct_LIF
 
-from .alphazero_utils import A0_loss, get_masked_logits
+from .utils import A0_loss, get_masked_logits
 from .data.environment_interaction import make_recurrent_fn, make_environment_interaction
 from .data.generator import VertexGameGenerator
-from .data.replay_memory import AlphaGradReplayMemory
+from .data.replay_buffer import AlphaGradReplayMemory
 
 parser = argparse.ArgumentParser()
 

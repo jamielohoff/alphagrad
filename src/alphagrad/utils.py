@@ -53,3 +53,23 @@ def get_masked_logits(logits, state, num_intermediates):
 	action_mask = one_hot_state.sum(axis=0)
 	return jnp.where(action_mask == 0, logits, -100000.)
 
+
+@ft.partial(jax.vmap, in_axes=(0, None))
+def preprocess_data(data, idx=0):
+    """TODO add documentation
+
+    Args:
+        data (_type_): _description_
+        idx (int, optional): _description_. Defaults to 0.
+
+    Returns:
+        _type_: _description_
+    """
+    final_rew = data.at[-1, idx].get()
+    
+    rew = jnp.roll(data[:, idx], 1, axis=0)
+    rew = rew.at[0].set(0.)
+    
+    val = final_rew - rew
+    return data.at[:, idx].set(val)
+

@@ -12,11 +12,12 @@ import chex
 import mctx
 import equinox as eqx
 
+from graphax import GraphInfo
 
 # TODO needs adjustment to new auto-regressive models!
 # TODO add documentation
 def make_recurrent_fn(nn_model: chex.PyTreeDef,
-                    num_intermediates: int, 
+                    info: GraphInfo, 
                     batched_step: Callable,
                     batched_get_masked_logits: Callable) -> Callable:
     """TODO write docstring
@@ -30,11 +31,11 @@ def make_recurrent_fn(nn_model: chex.PyTreeDef,
     Returns:
         Callable: _description_
     """
-    def recurrent_fn(params, rng_key, actions, state):
+    def recurrent_fn(params, rng_key, actions, state) -> Callable:
         del rng_key
         batchsize, nn_params = params
         next_state, reward, _ = batched_step(state, actions) # dynamics function
-        next_obs = next_state.edges[:, jnp.newaxis, :, :]
+        next_obs = next_state.edges
 
         # prediction function
         network = jtu.tree_map(lambda x, y: y if eqx.is_inexact_array(x) else x, nn_model, nn_params)
@@ -42,7 +43,9 @@ def make_recurrent_fn(nn_model: chex.PyTreeDef,
 
         output = batch_network(next_obs)
         policy_logits = output[:, 1:]
-        masked_logits = batched_get_masked_logits(policy_logits, state, num_intermediates)
+        masked_logits = batched_get_masked_logits(policy_logits, 
+                                                state, 
+                                                info.num_intermediates)
         value = output[:, 0]
 
         # On a single-player environment, use discount from [0, 1].
@@ -56,14 +59,14 @@ def make_recurrent_fn(nn_model: chex.PyTreeDef,
     return recurrent_fn
 
 
-def make_environment_interaction(num_intermediates: int,
+def make_environment_interaction(info: GraphInfo,
                                 num_simulations: int,
                                 recurrent_fn: Callable,
                                 batched_step: Callable,
-                                batched_one_hot: Callable, **kwargs):
+                                batched_one_hot: Callable, **kwargs) -> Callable:
     """TODO write docstring
     """
-    def environment_interaction(network: chex.PyTreeDef, batchsize: int, init_carry):
+    def environment_interaction(network, batchsize, init_carry):
         batched_network = jax.vmap(network)
         nn_params = eqx.filter(network, eqx.is_inexact_array)
         
@@ -72,7 +75,7 @@ def make_environment_interaction(num_intermediates: int,
             obs = state.edges[:, jnp.newaxis, :, :]
     
             # create action mask
-            one_hot_state = batched_one_hot(state.state-1, num_intermediates)
+            one_hot_state = batched_one_hot(state.state-1, info.num_intermediates)
             mask = one_hot_state.sum(axis=1)
 
             output = batched_network(obs)
@@ -112,24 +115,4 @@ def make_environment_interaction(num_intermediates: int,
         return jnp.stack(output).transpose(1, 0, 2)
     
     return environment_interaction
-
-
-@ft.partial(jax.vmap, in_axes=(0, None))
-def preprocess_data(data, idx=0):
-    """TODO add documentation
-
-    Args:
-        data (_type_): _description_
-        idx (int, optional): _description_. Defaults to 0.
-
-    Returns:
-        _type_: _description_
-    """
-    final_rew = data.at[-1, idx].get()
-    
-    rew = jnp.roll(data[:, idx], 1, axis=0)
-    rew = rew.at[0].set(0.)
-    
-    val = final_rew - rew
-    return data.at[:, idx].set(val)
 

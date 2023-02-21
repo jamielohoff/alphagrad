@@ -5,8 +5,10 @@ from typing import Sequence, Tuple
 import numpy as np
 
 import chex
+
+from graphax import GraphInfo
  
-class AlphaGradReplayMemory:
+class AlphaGradReplayBuffer:
     """TODO write documentation
 
     Args:
@@ -19,12 +21,14 @@ class AlphaGradReplayMemory:
     
     def __init__(self, 
                 capacity: int,
-                shape: Tuple[int, int, int]) -> None:
+                info: GraphInfo) -> None:
         self.capacity = capacity
         self.memory = deque([], maxlen=capacity)
         
-        num_x, num_v, num_y = shape
-        self.edges_shape = (num_v, num_x+num_v, num_v+num_y)
+        num_i = info.num_inputs
+        num_v = info.num_intermediates
+        num_o = info.num_outputs
+        self.edges_shape = (num_v, num_i+num_v, num_v+num_o)
         
         obs_idx = np.prod(np.array(self.edges_shape))
         policy_idx = obs_idx + num_v
