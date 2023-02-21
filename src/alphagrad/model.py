@@ -9,7 +9,8 @@ import jax.random as jrand
 import chex
 import equinox as eqx
 
-from encoder import Encoder
+from .transformer.encoder import Encoder
+from graphax import GraphInfo
 
 
 class ConvEmbedding(eqx.Module):
@@ -59,7 +60,7 @@ class AlphaGradModel(eqx.Module):
     num_policy_heads: int
     
     def __init__(self,
-                input_shape: Tuple[int, int, int], 
+                info: GraphInfo, 
                 embedding_dim: int, 
                 out_channels: int, 
                 kernel_size: int, 
@@ -77,11 +78,14 @@ class AlphaGradModel(eqx.Module):
         super().__init__()
         keys = jrand.split(key, 6)
         
-        num_intermediates = input_shape[1]
+        num_i = info.num_inputs
+        num_v = info.num_intermediates
+        num_o = info.num_outputs
+        input_shape = (num_i, num_v, num_o)
                 
-        # Definig convolutional embedding and positional encoding
+        # Defining convolutional embedding and positional encoding
         self.embedding = ConvEmbedding(input_shape, embedding_dim, out_channels, kernel_size, key=keys[0])
-        self.positional_encoding = eqx.nn.Embedding(input_shape[1], embedding_dim, key=keys[1])
+        self.positional_encoding = eqx.nn.Embedding(num_v, embedding_dim, key=keys[1])
         
         
         # Defining transformer torso
@@ -99,7 +103,7 @@ class AlphaGradModel(eqx.Module):
                                 in_dim=embedding_dim,
                                 ff_dim=policy_ff_dim,
                                 key=keys[3])
-        policy_linear = eqx.nn.Linear(embedding_dim, num_intermediates, key=keys[4])
+        policy_linear = eqx.nn.Linear(embedding_dim, num_v, key=keys[4])
         self.policy_linear = jax.vmap(policy_linear)
         
         # Defining value head
@@ -123,13 +127,4 @@ class AlphaGradModel(eqx.Module):
         policy = self.policy_tf(out, mask=mask, key=policy_key)
         policy = self.policy_linear(policy)
         return jnp.concatenate((value, policy), axis=1)
-
-
-# key = jrand.PRNGKey(1337)
-# x = jnp.ones((11, 15, 15))
-# model = AlphaGradModel((4, 11, 4), 128, 16, 9, 3, 6, 512, key=key)
-# print(model(x, None, key))
-
-# x = jnp.ones((4, 15, 15))
-# print(model(x, None, key))
 

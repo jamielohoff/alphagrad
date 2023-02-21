@@ -30,7 +30,7 @@ class AlphaGradReplayBuffer:
         num_o = info.num_outputs
         self.edges_shape = (num_v, num_i+num_v, num_v+num_o)
         
-        obs_idx = np.prod(np.array(self.edges_shape))
+        obs_idx = np.prod(np.array(self.edges_shape)[1:])
         policy_idx = obs_idx + num_v
         reward_idx = policy_idx + 1
         self.split_idxs = (obs_idx, policy_idx, reward_idx)
@@ -44,15 +44,12 @@ class AlphaGradReplayBuffer:
             rewards
             done
         """
-        if samples.ndim == 1:
-            self.memory.append(samples)
-        else: 
-            self.memory.extend([sample for sample in samples])
+        self.memory.extend([sample for sample in samples])
 
     def sample(self, batchsize: int) -> Sequence[chex.Array]:
         """Sample a batch of transitions from the replay buffer and return them as a batched tuple"""
         transitions = np.stack(random.sample(self.memory, batchsize))
-        obs, search_policy, rewards, terminal = np.split(transitions, self.split_idxs, axis=1)
+        obs, search_policy, rewards, terminal = np.split(transitions, self.split_idxs, axis=-1)
         obs = obs.reshape(batchsize, *self.edges_shape)
         return obs, search_policy, rewards, terminal
 
