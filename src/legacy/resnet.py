@@ -18,10 +18,11 @@ class ResidualBlock(eqx.Module):
         super().__init__()
         self.layers = layers
 
-    def __call__(self, x: chex.Array):
+    def __call__(self, x: chex.Array, *, key: chex.PRNGKey = None):
         y = x
         for layer in self.layers:
-            y = layer(y)
+            subkey, key = jrand.split(key, 2)
+            y = layer(y, key=subkey)
         return x + y
 
 

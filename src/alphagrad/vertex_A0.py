@@ -21,13 +21,14 @@ import graphax
 from graphax.graph import GraphState
 from graphax.game import VertexGame
 from graphax.elimination import forward, reverse
-from graphax.examples.arbitrary import construct_random_graph
+from graphax.examples.random import construct_random_graph
 from graphax.examples.helmholtz import construct_Helmholtz
 from graphax.examples.lif import construct_LIF
 
-from alphazero import A0_loss, get_masked_logits, MCTSReplayMemory
-from resnet import ResNet
-
+from .alphazero_utils import A0_loss, get_masked_logits
+from .data.environment_interaction import make_recurrent_fn, make_environment_interaction
+from .data.generator import VertexGameGenerator
+from .data.replay_memory import AlphaGradReplayMemory
 
 parser = argparse.ArgumentParser()
 
@@ -103,17 +104,6 @@ env = VertexGame(GS)
 
 nn_key, key = jrand.split(key, 2)
 subkeys = jrand.split(nn_key, 4)
-
-# NN = eqx.nn.Sequential([eqx.nn.Conv2d(1, 16, 7, key=subkeys[0]),
-#                         eqx.nn.Lambda(jnn.relu),
-                        
-#                         eqx.nn.Conv2d(16, 32, 7, key=subkeys[1]),
-#                         eqx.nn.Lambda(jnn.relu),
-                        
-#                         eqx.nn.Lambda(jnp.ravel),
-#                         eqx.nn.Linear(288, 64, key=subkeys[2]),
-#                         eqx.nn.Lambda(jnn.relu),
-#                         eqx.nn.Linear(64, NUM_INTERMEDIATES+1, key=subkeys[3])])
 
 
 NN = ResNet(12, num_classes=NUM_INTERMEDIATES+1, key=nn_key)

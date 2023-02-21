@@ -53,25 +53,3 @@ def get_masked_logits(logits, state, num_intermediates):
 	action_mask = one_hot_state.sum(axis=0)
 	return jnp.where(action_mask == 0, logits, -100000.)
 
-
-@ft.partial(jax.vmap, in_axes=(0, None))
-def preprocess_data(data, idx=0):
-    rew = data.at[-1, idx].get()
-    return data.at[:, idx].set(rew)
-
-
-class MCTSReplayMemory(object):
-    def __init__(self, capacity):
-        self.memory = deque([], maxlen=capacity)
-
-    def push(self, values):
-        """Save a transition"""        
-        self.memory.append(values)
-
-    def sample(self, batch_size):
-        transitions = random.sample(self.memory, batch_size)
-        return np.stack(transitions)
-
-    def __len__(self):
-        return len(self.memory)
-

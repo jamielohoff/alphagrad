@@ -12,7 +12,7 @@ import chex
 import optax
 import equinox as eqx
 
-from encoder import Encoder
+from alphagrad.transformer.encoder import Encoder
 
 parser = argparse.ArgumentParser()
 
@@ -29,22 +29,22 @@ parser.add_argument("--epochs", type=int,
                     default=5000, help="Number of runs on random data.")
 
 parser.add_argument("--batchsize", type=int, 
-                    default=32, help="Learning batchsize.")
+                    default=64, help="Learning batchsize.")
 
 parser.add_argument("--blocksize", type=int, 
-                    default=8, help="Maximum context size.")
+                    default=256, help="Maximum context size.")
 
 parser.add_argument("--lr", type=float, 
-                    default=1e-3, help="Learning rate.")
+                    default=3e-4, help="Learning rate.")
 
 parser.add_argument("--heads", type=int, 
-                    default=6, help="Learning rate.")
+                    default=6, help="Number of attention heads.")
 
 parser.add_argument("--depth", type=int, 
-                    default=3, help="Learning rate.")
+                    default=6, help="Number of attention blocks.")
 
 parser.add_argument("--embedding_size", type=int, 
-                    default=128, help="Learning rate.")
+                    default=384, help="size of the embedding.")
  
 args = parser.parse_args()
 
@@ -58,8 +58,7 @@ EPOCHS = args.epochs
 HEADS = args.heads
 EMBEDDING_SIZE = args.embedding_size
 DEPTH = args.depth
-MASK = jnp.tile(jnp.tril(jnp.ones((BLOCKSIZE, BLOCKSIZE)))[jnp.newaxis, :, :],(HEADS,1,1))
-
+MASK = jnp.tile(jnp.tril(jnp.ones((BLOCKSIZE, BLOCKSIZE)))[jnp.newaxis, :, :],(HEADS, 1, 1))
 
 # open and load dataset
 with open("tiny-shakespeare.txt", "r", encoding="utf-8") as f:
@@ -82,11 +81,14 @@ train_data = data[:n]
 val_data = data[n:]
 
 
-def get_batch(split: str = "train", key: chex.PRNGKey = None):
+def get_batch(batchsize: int,
+            blocksize: int,
+            split: str = "train", 
+            key: chex.PRNGKey = None):
     data = train_data if split == "train" else val_data
-    ix = jrand.randint(key, (BATCHSIZE,), minval=0, maxval=len(data)-BLOCKSIZE)
-    x = jnp.stack([data[i:i+BLOCKSIZE] for i in ix])
-    y = jnp.stack([data[i+1:i+BLOCKSIZE+1] for i in ix])
+    ix = jrand.randint(key, (batchsize,), minval=0, maxval=len(data)-blocksize)
+    x = jnp.stack([data[i:i+blocksize] for i in ix])
+    y = jnp.stack([data[i+1:i+blocksize+1] for i in ix])
     return x, y
 
 
@@ -101,22 +103,22 @@ class TransformerModel(eqx.Module):
                 block_size, 
                 num_layers, 
                 num_heads, 
-                in_dim, 
+                embedding_dim, 
                 ff_dim, 
                 key) -> None:
         super().__init__()
         token_key, pos_key, lin_key, key = jrand.split(key, 4)
-        self.tokenizer = eqx.nn.Embedding(vocab_size, in_dim, key=token_key)
+        self.tokenizer = eqx.nn.Embedding(vocab_size, embedding_dim, key=token_key)
 
-        self.pos_enc = eqx.nn.Embedding(block_size, in_dim, key=pos_key)
+        self.pos_enc = eqx.nn.Embedding(block_size, embedding_dim, key=pos_key)
 
         self.tf = Encoder(num_layers=num_layers,
                             num_heads=num_heads,
-                            in_dim=in_dim,
+                            in_dim=embedding_dim,
                             ff_dim=ff_dim, 
                             key=key)
 
-        linear = eqx.nn.Linear(in_features=in_dim, out_features=vocab_size, key=lin_key)
+        linear = eqx.nn.Linear(in_features=embedding_dim, out_features=vocab_size, key=lin_key)
         self.linear = jax.vmap(linear)
 
     def __call__(self, idx, key, mask):
@@ -128,13 +130,15 @@ class TransformerModel(eqx.Module):
         x = self.tf(x, key=key, mask=mask)
         return self.linear(x)
 
-
+# This is so damn slow, it needs refinement
 def generate(model, idx, max_new_tokens=256, key=None):
     model = eqx.tree_inference(model, True)
     for _ in range(max_new_tokens):
         subkey, key = jrand.split(key, 2)
         context = idx[-BLOCKSIZE:]
-        logits = model(context, key, None)
+        length = len(context)
+        mask = jnp.tile(jnp.tril(jnp.ones((length, length)))[jnp.newaxis, :, :],(HEADS, 1, 1))
+        logits = eqx.filter_jit(model)(context, key, mask)
         logits = logits[-1, :]
         idx_next = jrand.categorical(subkey, logits, shape=(1,))
         idx = jnp.concatenate((idx, idx_next), axis=0)
@@ -161,6 +165,15 @@ def update(model, opt_state, xs, targets, keys, mask):
     return loss, model, opt_state
 
 
+def validate(model, key):
+    batch_key, key = jrand.split(key, 2)
+    keys = jrand.split(key, BATCHSIZE)
+    model = eqx.tree_inference(model, True)
+    x, y = get_batch(BATCHSIZE, BLOCKSIZE, split="validation", key=batch_key)
+    losses =  eqx.filter_jit(ce_loss)(model, x, y, keys, MASK)
+    return losses.mean()
+
+
 key = jrand.PRNGKey(args.seed)
 model = TransformerModel(VOCAB_SIZE, BLOCKSIZE, DEPTH, HEADS, EMBEDDING_SIZE, 4*EMBEDDING_SIZE, key)
 optim = optax.adamw(args.lr)
@@ -169,10 +182,13 @@ opt_state = optim.init(eqx.filter(model, eqx.is_inexact_array))
 pbar = tqdm.tqdm(range(EPOCHS))
 for epoch in pbar:
     batch_key, model_key, key = jrand.split(key, 3)
-    x, y = get_batch(key=batch_key)
+    x, y = get_batch(BATCHSIZE, BLOCKSIZE, key=batch_key)
     keys = jrand.split(key, BATCHSIZE)
     loss, model, opt_state = update(model, opt_state, x, y, keys, MASK)
     pbar.set_description(f"loss: {loss}")
+    if epoch % 500 == 0:
+        val_loss = validate(model, key)
+        print("Loss:", loss, "Validation loss:", val_loss)
 
 print(decode(generate(model, jnp.array([0]), key=key).tolist()))
 

@@ -69,17 +69,18 @@ class EncoderLayer(eqx.Module):
                 xs: chex.Array, 
                 mask: Optional[chex.Array] = None, *, 
                 key: chex.PRNGKey) -> chex.Array:
-        keys = jrand.split(key, 2)
-        out = self.attn_layer(xs, xs, xs, mask=mask)
-        out = xs + self.attn_dropout(out, key=keys[0])
-        out = self.attn_norm(out)
+        keys = jrand.split(key, 3)
+        
+        out = self.attn_norm(xs)
+        out = self.attn_layer(out, out, out, mask=mask, key=keys[0])
+        out = xs + self.attn_dropout(out, key=keys[1])
 
-        ff_out = self.ff_layer1(out)
+        ff_out = self.ff_norm(out)
+        ff_out = self.ff_layer1(ff_out)
         ff_out = self.ff_activation_fn(ff_out)
         ff_out = self.ff_layer2(ff_out)
         
-        ff_out = out + self.ff_dropout(ff_out, key=keys[1])
-        ff_out = self.ff_norm(ff_out)
+        ff_out = out + self.ff_dropout(ff_out, key=keys[2])
         return self.output_activation_fn(ff_out)
 
 

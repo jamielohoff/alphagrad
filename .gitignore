@@ -11,11 +11,9 @@
 __pycache__/*
 .cache/*
 .*.swp
-.ipynb_checkpoints*
-trash
+*/.ipynb_checkpoints/*
 .DS_Store
-wandb
-datasets/
+
 # Project files
 .ropeproject
 .project
@@ -55,11 +53,8 @@ MANIFEST
 .conda*/
 .python-version
 
-# other
-/__pycache__
-/*/__pycache__
-/*/*/__pycache__
-/*/*/*/__pycache__
-/*/*/*/*/__pycache__
-/wandb
-/*.png
+# Custom files and folders
+**/wandb/
+**/mnist/
+**/cifar10/
+**/__pycache__/
