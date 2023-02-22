@@ -146,7 +146,8 @@ opt_state = optim.init(eqx.filter(MODEL, eqx.is_inexact_array))
 
 def train_agent(samples, network, opt_state, key):
 	# compute loss gradient compared to tree search targets and update parameters
-	obs, search_policy, search_value, _ = random_sample_mask(key, *samples)
+	obs, search_policy, search_value, _ = samples
+	print(search_value)
 
 	key, subkey = jrand.split(key, 2)
 	subkeys = jrand.split(subkey, obs.shape[0])
