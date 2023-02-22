@@ -51,7 +51,7 @@ def make_recurrent_fn(nn_model: chex.PyTreeDef,
 
         # On a single-player environment, use discount from [0, 1].
         discount = jnp.ones(batchsize)
-        recurrent_fn_output = mctx.RecurrentFnOutput(reward=reward,
+        recurrent_fn_output = mctx.RecurrentFnOutput(reward=reward, # we might have a grave mistake here, this needs to be changed accoring to preprocessing_data!
                                                     discount=discount,
                                                     prior_logits=masked_logits,
                                                     value=value)

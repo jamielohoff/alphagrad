@@ -67,11 +67,11 @@ def preprocess_data(data: chex.Array, idx: int = 0) -> chex.Array:
     """
     final_rew = data.at[-1, idx].get()
     
-    rew = jnp.roll(data[:, idx], 1, axis=0)
-    rew = rew.at[0].set(0.)
+    # rew = jnp.roll(data[:, idx], 1, axis=0)
+    # rew = rew.at[0].set(0.)
     
-    val = final_rew - rew
-    return data.at[:, idx].set(val)
+    # val = final_rew - rew
+    return data.at[:, idx].set(final_rew)
 
 
 def random_sample_mask(key: chex.PRNGKey, 

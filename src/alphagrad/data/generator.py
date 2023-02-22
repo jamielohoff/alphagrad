@@ -52,7 +52,7 @@ class VertexGameGenerator:
         keys = jrand.split(key, num_games)
         for key in keys:
             fraction = jrand.uniform(key)
-            edges, info = construct_Helmholtz()# construct_random(key, info, fraction=fraction)
+            edges, info = construct_Helmholtz() # construct_random(key, info, fraction=fraction) # 
             self.info_repository.append(info)
             self.edge_repository.append(edges)
 

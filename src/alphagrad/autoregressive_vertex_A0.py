@@ -37,7 +37,7 @@ parser.add_argument("--name", type=str,
                     default="Vertex_A0_test", help="Name of the experiment.")
 
 parser.add_argument("--gpu", type=str, 
-                    default="0", help="GPU identifier.")
+                    default="1", help="GPU identifier.")
 
 parser.add_argument("--seed", type=int,
                     default=1337, help="Random seed.")
@@ -46,25 +46,25 @@ parser.add_argument("--episodes", type=int,
                     default=2500, help="Number of runs on random data.")
 
 parser.add_argument("--replay_size", type=int, 
-                    default=256, help="Size of the replay buffer.")
+                    default=1024, help="Size of the replay buffer.")
 
 parser.add_argument("--num_actions", type=int, 
                     default=11, help="Number of actions.")
 
 parser.add_argument("--num_simulations", type=int, 
-                    default=5, help="Number of simulations.")
+                    default=25, help="Number of simulations.")
 
 parser.add_argument("--batchsize", type=int, 
-                    default=4, help="Learning batchsize.")
+                    default=64, help="Learning batchsize.")
 
-parser.add_argument("--rollout_batchsize", type=int, default=4, 
+parser.add_argument("--rollout_batchsize", type=int, default=8, 
                     help="Batchsize for environment interaction.")
 
 parser.add_argument("--regularization", type=float, 
                     default=0., help="Contribution of L2 regularization.")
 
 parser.add_argument("--lr", type=float, 
-                    default=3e-4, help="Learning rate.")
+                    default=2e-4, help="Learning rate.")
 
 parser.add_argument("--num_inputs", type=int, 
                     default=4, help="Number input variables.")
@@ -84,7 +84,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 NUM_INPUTS = args.num_inputs
 NUM_INTERMEDIATES = args.num_actions
 NUM_OUTPUTS = args.num_outputs
-NUM_GAMES = 4
+NUM_GAMES = 128
 SHAPE = (NUM_INPUTS+NUM_INTERMEDIATES, NUM_INTERMEDIATES+NUM_OUTPUTS)
 
 key = jrand.PRNGKey(args.seed)
@@ -105,7 +105,7 @@ buf = AlphaGradReplayBuffer(args.replay_size, INFO)
 
 nn_key, key = jrand.split(key, 2)
 subkeys = jrand.split(nn_key, 4)
-MODEL = AlphaGradModel(INFO, 128, 16, 9, 3, 6, 512, key=key)
+MODEL = AlphaGradModel(INFO, 64, 32, 7, 2, 6, key=key)
 
 
 batched_step = jax.vmap(env.step)
