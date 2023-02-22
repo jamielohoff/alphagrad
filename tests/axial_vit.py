@@ -27,7 +27,7 @@ parser.add_argument("--name", type=str,
                     default="CIFAR10_ViT_test", help="Name of the experiment.")
 
 parser.add_argument("--gpu", type=str, 
-                    default="0", help="GPU identifier.")
+                    default="1", help="GPU identifier.")
 
 parser.add_argument("--seed", type=int,
                     default=1337, help="Random seed.")
@@ -112,9 +112,10 @@ class TransformerModel(eqx.Module):
         super().__init__()
         embed_key, lin_key, key = jrand.split(key, 3)
         channels, height, width = shape
-        tensor_shape = np.moveaxis(np.array(shape), 0, -1)
 
         self.embedding = eqx.nn.Conv2d(channels, in_dim, 7, key=embed_key)
+        # tensor_shape is smaller than input image due to convolutional embedding
+        tensor_shape = np.array((height-6, width-6, channels))
 
         keys = jrand.split(key, num_layers)
         self.layers = [AxialTransformerBlock(tensor_shape, num_heads, in_dim, embedding_dim, key=key) for key in keys]
