@@ -3,6 +3,7 @@ This file contains methods that provide symmetry operations that can be
 safely used on computational graphs for data augumentation.
 
 mainly operates on numpy arrays
+TODO add documentation
 """
 from typing import Sequence
 import numpy as np
@@ -52,9 +53,4 @@ def prune_samples(samples: np.ndarray,
     ts = np.random.randint(1, num_intermediates+1, size=(batchsize,))
     batch = np.stack([_prune_sample(t, s) for t, s in zip(ts, samples)])
     return batch
-        
-
-print(batch.shape)
-samples = prune_samples(batch, info)
-print(samples)
 

@@ -23,12 +23,12 @@ from graphax.examples import construct_random, \
 							construct_Helmholtz, \
 							construct_LIF
 
-from alphagrad.utils import A0_loss, get_masked_logits, preprocess_data, random_sample_mask
+from alphagrad.utils import A0_loss, get_masked_logits, preprocess_data
 from alphagrad.data import VertexGameGenerator, \
-							AlphaGradReplayBuffer, \
 							make_recurrent_fn, \
 							make_environment_interaction
 from alphagrad.model import AlphaGradModel
+from alphagrad.differentiate import differentiate
 
 
 parser = argparse.ArgumentParser()
@@ -45,9 +45,6 @@ parser.add_argument("--seed", type=int,
 parser.add_argument("--episodes", type=int, 
                     default=2500, help="Number of runs on random data.")
 
-parser.add_argument("--replay_size", type=int, 
-                    default=1024, help="Size of the replay buffer.")
-
 parser.add_argument("--num_actions", type=int, 
                     default=11, help="Number of actions.")
 
@@ -55,10 +52,7 @@ parser.add_argument("--num_simulations", type=int,
                     default=25, help="Number of simulations.")
 
 parser.add_argument("--batchsize", type=int, 
-                    default=64, help="Learning batchsize.")
-
-parser.add_argument("--rollout_batchsize", type=int, default=8, 
-                    help="Batchsize for environment interaction.")
+                    default=16, help="Learning batchsize.")
 
 parser.add_argument("--regularization", type=float, 
                     default=0., help="Contribution of L2 regularization.")
@@ -91,21 +85,11 @@ key = jrand.PRNGKey(args.seed)
 edges, INFO = construct_Helmholtz() # construct_LIF() # 
 state = make_vertex_game_state(INFO, edges)
 env = VertexGame(state)
-buf = AlphaGradReplayBuffer(args.replay_size, INFO)
-
-# forward_edges = copy.deepcopy(edges)
-# _, ops = forward(forward_edges, INFO)
-# print("forward-mode:", ops)
-
-
-# reverse_edges = copy.deepcopy(edges)
-# _, ops = reverse(reverse_edges, INFO)
-# print("reverse-mode:", ops)
 
 
 nn_key, key = jrand.split(key, 2)
 subkeys = jrand.split(nn_key, 4)
-MODEL = AlphaGradModel(INFO, 64, 32, 7, 2, 6, key=key)
+MODEL = AlphaGradModel(INFO, 128, 64, 7, 3, 6, key=key)
 
 
 batched_step = jax.vmap(env.step)
@@ -124,30 +108,35 @@ env_interaction = make_environment_interaction(INFO,
                                             	args.num_simulations,
                                                 recurrent_fn,
                                                 batched_step,
-                                                batched_one_hot)
+                                                batched_one_hot,
+												temperature=0)
+
 
 game_generator = VertexGameGenerator(NUM_GAMES, INFO, key)
-
-def initialize_replay_buffer(buf, model, size, key):
-	print("Initializing replay buffer...")
-	batch_games = game_generator(size, key)
-	init_carry = (batch_games, jnp.zeros(size), key) # needs editing
-
-	transitions = eqx.filter_jit(env_interaction)(model, size, init_carry)
-	transitions = preprocess_data(transitions, -2)
-	buf.push(transitions)
-	return buf
-
-buf = initialize_replay_buffer(buf, MODEL, args.replay_size, key)
-
 optim = optax.adam(args.lr)
 opt_state = optim.init(eqx.filter(MODEL, eqx.is_inexact_array))
 
+### needed to reassemble data
+num_i = INFO.num_inputs
+num_v = INFO.num_intermediates
+num_o = INFO.num_outputs
+edges_shape = (num_i+num_v, num_v+num_o)
+obs_idx = jnp.prod(jnp.array(edges_shape))
+policy_idx = obs_idx + num_v
+reward_idx = policy_idx + 1
+split_idxs = (obs_idx, policy_idx, reward_idx)
 
-def train_agent(samples, network, opt_state, key):
+def train_agent(batch_games, network, opt_state, key):
 	# compute loss gradient compared to tree search targets and update parameters
-	obs, search_policy, search_value, _ = samples
-	print(search_value)
+	init_carry = (batch_games, jnp.zeros(args.batchsize), key)
+	data = env_interaction(network, args.batchsize, init_carry)
+	data = preprocess_data(data, -2)
+
+	obs, search_policy, search_value, _ = jnp.split(data, split_idxs, axis=-1)
+	batchsize = args.batchsize*num_v
+	search_policy = search_policy.reshape(batchsize, num_v)
+	search_value = search_value.reshape(batchsize, 1)
+	obs = obs.reshape(batchsize, *edges_shape)
 
 	key, subkey = jrand.split(key, 2)
 	subkeys = jrand.split(subkey, obs.shape[0])
@@ -162,44 +151,33 @@ def train_agent(samples, network, opt_state, key):
 	return loss, network, opt_state
 
 
-def differentiate(network):
-	state = env.reset(key)
+edges, info = construct_Helmholtz()
+helmholtz_game = make_vertex_game_state(info, edges)
 
-	rew = 0
-	solved = False
-	while not solved:
-		obs = state.edges
-		t = state.t
-		output = network(obs, key)
-		logits = output[t, 1:]
-		value = output[t, 0]
-		
-		masked_logits = get_masked_logits(logits, state, NUM_INTERMEDIATES)
-  
-		action = jnp.argmax(masked_logits).astype(jnp.int32)
-		print(state.vertices, action+1, value, jnn.softmax(masked_logits))
-		state, reward, terminated = env.step(state, action)
-		rew += reward
-		solved = terminated
-	return rew
+gkey, key = jrand.split(key)
+edges, info = construct_random(gkey, INFO, fraction=0.5)
+random_game = make_vertex_game_state(info, edges)
+
+
+forward_edges = copy.deepcopy(edges)
+_, ops = forward(forward_edges, info)
+print("forward-mode:", ops)
+
+
+reverse_edges = copy.deepcopy(edges)
+_, ops = reverse(reverse_edges, info)
+print("reverse-mode:", ops)
+
 
 pbar = tqdm(range(args.episodes))
 rewards = []
 for e in pbar:
 	# Data wrangling
-	batch_games = game_generator(args.rollout_batchsize, key)
-	init_carry = (batch_games, jnp.zeros(args.rollout_batchsize), key)
-
-	data = eqx.filter_jit(env_interaction)(MODEL, args.rollout_batchsize, init_carry)
-	data = preprocess_data(data, -2)
-	buf.push(data)
-
-	samples = buf.sample(args.batchsize)
+	batch_games = game_generator(args.batchsize, key)
 
 	train_key, key = jrand.split(key)
-	loss, MODEL, opt_state = train_agent(samples, MODEL, opt_state, train_key) # make jittable again
-	rew = differentiate(MODEL)
+	loss, MODEL, opt_state = eqx.filter_jit(train_agent)(batch_games, MODEL, opt_state, train_key)
+	rew = differentiate(MODEL, env_interaction, key, random_game, helmholtz_game)
 	# wandb.log({"loss": loss.tolist(), "# computations": -rew.tolist()})
-	rewards.append(-rew.tolist())
 	pbar.set_description(f"episode: {e}, loss: {loss}, return: {rew}")
 

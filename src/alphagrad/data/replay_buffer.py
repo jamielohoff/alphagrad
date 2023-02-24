@@ -51,7 +51,10 @@ class AlphaGradReplayBuffer:
         self.memory.extend([sample for sample in samples])
 
     def sample(self, batchsize: int) -> Sequence[chex.Array]:
-        """Sample a batch of transitions from the replay buffer and return them as a batched tuple"""
+        """
+        Sample a batch of transitions from the replay buffer and return 
+        them as a batched tuple
+        """
         transitions = np.stack(random.sample(self.memory, batchsize))
         transitions = prune_samples(transitions, self.edges_shape[0]) if self.temporal_pruning else transitions
         obs, search_policy, rewards, terminal = np.split(transitions, self.split_idxs, axis=-1)

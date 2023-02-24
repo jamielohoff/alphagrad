@@ -42,16 +42,15 @@ def make_recurrent_fn(nn_model: chex.PyTreeDef,
 
         keys = jrand.split(rng_key, batchsize)
         output = batch_network(next_obs, keys)
-        t = next_state.t[0].astype(jnp.int32)
-        policy_logits = output[:, t, 1:]
-        value = output[:, t, 0]
+        policy_logits = output[:, 1:]
+        value = output[:, 0]
         masked_logits = batched_get_masked_logits(policy_logits, 
                                                 state, 
                                                 info.num_intermediates)
 
         # On a single-player environment, use discount from [0, 1].
         discount = jnp.ones(batchsize)
-        recurrent_fn_output = mctx.RecurrentFnOutput(reward=reward, # we might have a grave mistake here, this needs to be changed accoring to preprocessing_data!
+        recurrent_fn_output = mctx.RecurrentFnOutput(reward=reward,
                                                     discount=discount,
                                                     prior_logits=masked_logits,
                                                     value=value)
@@ -64,7 +63,8 @@ def make_environment_interaction(info: GraphInfo,
                                 num_simulations: int,
                                 recurrent_fn: Callable,
                                 batched_step: Callable,
-                                batched_one_hot: Callable, **kwargs) -> Callable:
+                                batched_one_hot: Callable, 
+                                **kwargs) -> Callable:
     """TODO write docstring
     """
     def environment_interaction(network, batchsize, init_carry):
@@ -73,7 +73,6 @@ def make_environment_interaction(info: GraphInfo,
         
         def loop_fn(carry, _):
             state, rews, key = carry
-            t = state.t[0].astype(jnp.int32)
             obs = state.edges
     
             # create action mask
@@ -82,8 +81,8 @@ def make_environment_interaction(info: GraphInfo,
 
             keys = jrand.split(key, batchsize)
             output = batched_network(obs, keys)
-            policy_logits = output[:, t, 1:]
-            values = output[:, t, 0]
+            policy_logits = output[:, 1:]
+            values = output[:, 0]
 
             root = mctx.RootFnOutput(prior_logits=policy_logits,
                                     value=values,
@@ -92,12 +91,15 @@ def make_environment_interaction(info: GraphInfo,
             key, subkey = jrand.split(key, 2)
 
             params = (batchsize, nn_params)
+            qtransform = ft.partial(mctx.qtransform_completed_by_mix_value,
+                                    use_mixed_value=True)
             policy_output = mctx.muzero_policy(params,
                                                 subkey,
                                                 root,
                                                 recurrent_fn,
                                                 num_simulations,
                                                 invalid_actions=mask,
+                                                qtransform=qtransform,
                                                 **kwargs)
 
             # tree search derived targets for policy and value function
@@ -109,15 +111,14 @@ def make_environment_interaction(info: GraphInfo,
             # step the environment
             next_state, rewards, done = batched_step(state, action)
             rews += rewards	
-    
-            return (next_state, rews, key), jnp.concatenate([search_policy, 
+            obs_flattened = obs.reshape(batchsize, -1)
+            return (next_state, rews, key), jnp.concatenate([obs_flattened,
+                                                            search_policy, 
                                                             rews[:, jnp.newaxis], 
                                                             done[:, jnp.newaxis]], axis=1)
 
-        (state, _, _), output = lax.scan(loop_fn, init_carry, None, length=info.num_intermediates)
-        obs = state.edges.reshape(batchsize, info.num_intermediates, -1)
-        output = jnp.stack(output).transpose(1, 0, 2)
-        return jnp.concatenate((obs, output), axis=-1)
+        _, output = lax.scan(loop_fn, init_carry, None, length=info.num_intermediates)
+        return jnp.stack(output).transpose(1, 0, 2)
     
     return environment_interaction
 

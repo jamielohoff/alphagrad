@@ -1,4 +1,4 @@
-from typing import Callable, Sequence, Tuple
+from typing import Sequence
 
 import jax
 import jax.lax as lax
@@ -15,14 +15,6 @@ def to_jnp(info: GraphInfo) -> chex.Array:
     return jnp.array([*info])
 
 
-def expand(edges: chex.Array, info: GraphInfo) -> chex.Array:
-    padding = ((0, info.num_intermediates-1), (0, 0), (0, 0))
-    return jnp.pad(edges[jnp.newaxis, :, :], 
-                            pad_width=padding, 
-                            mode="constant", 
-                            constant_values=0)
-
-from graphax.examples import construct_Helmholtz
 class VertexGameGenerator:
     """
     TODO add documentation
@@ -34,7 +26,8 @@ class VertexGameGenerator:
     def __init__(self, 
                 num_games: int, 
                 info: GraphInfo, 
-                key: chex.PRNGKey = None) -> None:
+                key: chex.PRNGKey = None,
+                data_augumentation: bool = True) -> None:
         """initializes a fixed repository of possible vertex games
 
         Args:
@@ -52,7 +45,7 @@ class VertexGameGenerator:
         keys = jrand.split(key, num_games)
         for key in keys:
             fraction = jrand.uniform(key)
-            edges, info = construct_Helmholtz() # construct_random(key, info, fraction=fraction) # 
+            edges, info = construct_random(key, info, fraction=fraction)
             self.info_repository.append(info)
             self.edge_repository.append(edges)
 
@@ -71,7 +64,7 @@ class VertexGameGenerator:
         idxs = jrand.choice(key, self.game_idxs, shape=(batchsize,))
         ts = jnp.zeros(batchsize)
         infos = jnp.stack([to_jnp(self.info_repository[idx]) for idx in idxs])
-        edges = jnp.stack([expand(self.edge_repository[idx], self.info_repository[idx]) for idx in idxs])
+        edges = jnp.stack([self.edge_repository[idx] for idx in idxs])
         vertices = jnp.zeros((batchsize, self.info_repository[0][1]))
         return VertexGameState(t=ts,
                                info=infos,
