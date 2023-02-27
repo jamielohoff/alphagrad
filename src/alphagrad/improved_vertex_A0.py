@@ -68,7 +68,7 @@ parser.add_argument("--num_outputs", type=int,
 
 args = parser.parse_args()
 
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
 # wandb.init("Vertex_AlphaZero")
@@ -155,7 +155,7 @@ edges, info = construct_Helmholtz()
 helmholtz_game = make_vertex_game_state(info, edges)
 
 gkey, key = jrand.split(key)
-edges, info = construct_random(gkey, INFO, fraction=0.5)
+edges, info = construct_random(gkey, INFO, fraction=.5)
 random_game = make_vertex_game_state(info, edges)
 
 
