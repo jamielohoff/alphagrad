@@ -115,7 +115,8 @@ def make_environment_interaction(info: GraphInfo,
             return (next_state, rews, key), jnp.concatenate([obs_flattened,
                                                             search_policy, 
                                                             rews[:, jnp.newaxis], 
-                                                            done[:, jnp.newaxis]], axis=1)
+                                                            done[:, jnp.newaxis]], 
+                                                            axis=1)
 
         _, output = lax.scan(loop_fn, init_carry, None, length=info.num_intermediates)
         return jnp.stack(output).transpose(1, 0, 2)

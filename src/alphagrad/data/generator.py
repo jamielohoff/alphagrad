@@ -49,7 +49,6 @@ class VertexGameGenerator:
             self.info_repository.append(info)
             self.edge_repository.append(edges)
 
-    # TODO maybe implement as iterable?
     def __call__(self, 
                 batchsize: int, 
                 key: chex.PRNGKey = None) -> VertexGameState:

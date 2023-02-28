@@ -2,16 +2,13 @@ import os
 import copy
 import argparse
 import wandb
-import functools as ft
 
 import jax
 import jax.nn as jnn
 import jax.lax as lax
 import jax.numpy as jnp
 import jax.random as jrand
-import jax.tree_util as jtu
 
-import mctx
 import optax
 import equinox as eqx
 
@@ -27,7 +24,7 @@ from alphagrad.utils import A0_loss, get_masked_logits, preprocess_data
 from alphagrad.data import VertexGameGenerator, \
 							make_recurrent_fn, \
 							make_environment_interaction
-from alphagrad.model import AlphaGradModel
+from alphagrad.modelzoo import TransformerModel, CNNModel
 from alphagrad.differentiate import differentiate
 
 
@@ -52,7 +49,7 @@ parser.add_argument("--num_simulations", type=int,
                     default=25, help="Number of simulations.")
 
 parser.add_argument("--batchsize", type=int, 
-                    default=16, help="Learning batchsize.")
+                    default=32, help="Learning batchsize.")
 
 parser.add_argument("--regularization", type=float, 
                     default=0., help="Contribution of L2 regularization.")
@@ -68,7 +65,7 @@ parser.add_argument("--num_outputs", type=int,
 
 args = parser.parse_args()
 
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "False"
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
 # wandb.init("Vertex_AlphaZero")
@@ -78,7 +75,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 NUM_INPUTS = args.num_inputs
 NUM_INTERMEDIATES = args.num_actions
 NUM_OUTPUTS = args.num_outputs
-NUM_GAMES = 128
+NUM_GAMES = 64
 SHAPE = (NUM_INPUTS+NUM_INTERMEDIATES, NUM_INTERMEDIATES+NUM_OUTPUTS)
 
 key = jrand.PRNGKey(args.seed)
@@ -89,7 +86,7 @@ env = VertexGame(state)
 
 nn_key, key = jrand.split(key, 2)
 subkeys = jrand.split(nn_key, 4)
-MODEL = AlphaGradModel(INFO, 128, 64, 7, 3, 6, key=key)
+MODEL = TransformerModel(INFO, 64, 32, 7, 1, 6, key=key) # CNNModel(INFO, 7, key=key) # 
 
 
 batched_step = jax.vmap(env.step)
@@ -125,6 +122,7 @@ obs_idx = jnp.prod(jnp.array(edges_shape))
 policy_idx = obs_idx + num_v
 reward_idx = policy_idx + 1
 split_idxs = (obs_idx, policy_idx, reward_idx)
+
 
 def train_agent(batch_games, network, opt_state, key):
 	# compute loss gradient compared to tree search targets and update parameters
@@ -168,7 +166,7 @@ reverse_edges = copy.deepcopy(edges)
 _, ops = reverse(reverse_edges, info)
 print("reverse-mode:", ops)
 
-
+import time
 pbar = tqdm(range(args.episodes))
 rewards = []
 for e in pbar:
@@ -176,8 +174,13 @@ for e in pbar:
 	batch_games = game_generator(args.batchsize, key)
 
 	train_key, key = jrand.split(key)
+	start_time = time.time()
 	loss, MODEL, opt_state = eqx.filter_jit(train_agent)(batch_games, MODEL, opt_state, train_key)
+	print(time.time() - start_time)
+ 
+	start_time = time.time()
 	rew = differentiate(MODEL, env_interaction, key, random_game, helmholtz_game)
-	# wandb.log({"loss": loss.tolist(), "# computations": -rew.tolist()})
-	pbar.set_description(f"episode: {e}, loss: {loss}, return: {rew}")
+	print(time.time() - start_time)
+	# wandb.log({"loss": loss.tolist(), "# computations": rew[0].tolist()})
+	pbar.set_description(f"loss: {loss}, return: {rew}")
 

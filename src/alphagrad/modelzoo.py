@@ -13,7 +13,55 @@ from .transformer.axial import AxialTransformerBlock
 from graphax import GraphInfo
 
 
-class AlphaGradModel(eqx.Module):
+class CNNModel(eqx.Module):
+    conv1: eqx.nn.Conv2d
+    conv2: eqx.nn.Conv2d
+    conv3: eqx.nn.Conv2d
+    
+    policy_head: eqx.nn.MLP
+    value_head: eqx.nn.MLP
+    
+    def __init__(self,
+                info: GraphInfo,
+                kernel_size: int, 
+                *,
+                value_head_width: int = 256,
+                value_head_depth: int = 2,
+                num_policy_layers: int = 2,
+                policy_ff_dim: int = 512,
+                key: chex.PRNGKey = None, 
+                **kwargs) -> None:
+        super().__init__()
+        keys = jrand.split(key, 5)
+        
+        num_i = info.num_inputs
+        num_v = info.num_intermediates
+        num_o = info.num_outputs
+                
+        # Defining convolutional embedding
+        self.conv1 = eqx.nn.Conv2d(1, 16, 7, key=keys[0])
+        self.conv2 = eqx.nn.Conv2d(16, 32, kernel_size, key=keys[1])
+        self.conv3 = eqx.nn.Conv2d(32, 64, kernel_size, key=keys[2])
+
+        # Defining policy head
+        self.policy_head = eqx.nn.MLP(288, num_v, policy_ff_dim, num_policy_layers, key=keys[3])
+        
+        # Defining value head
+        self.value_head = eqx.nn.MLP(288, 1, value_head_width, value_head_depth, key=keys[4])
+        
+    def __call__(self, xs: chex.Array, key: chex.PRNGKey) -> chex.Array:  
+        xs = xs[jnp.newaxis, :, :]
+        xs = self.conv1(xs)
+        xs = self.conv2(xs)
+        # xs = self.conv3(xs)
+        
+        xs = xs.flatten()
+        value = self.value_head(xs)
+        policy = self.policy_head(xs)
+        return jnp.concatenate((value, policy))
+
+
+class TransformerModel(eqx.Module):
     embedding: eqx.nn.Conv2d
     
     torso: Sequence[AxialTransformerBlock]
@@ -33,7 +81,7 @@ class AlphaGradModel(eqx.Module):
                 value_head_width: int = 256,
                 value_head_depth: int = 2,
                 num_policy_layers: int = 2,
-                policy_ff_dim: int = 1024,
+                policy_ff_dim: int = 512,
                 key: chex.PRNGKey = None, 
                 **kwargs) -> None:
         super().__init__()
