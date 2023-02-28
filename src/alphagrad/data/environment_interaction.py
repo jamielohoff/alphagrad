@@ -65,10 +65,13 @@ def make_environment_interaction(info: GraphInfo,
                                 batched_step: Callable,
                                 batched_one_hot: Callable, 
                                 **kwargs) -> Callable:
-    """TODO write docstring
     """
-    def environment_interaction(network, batchsize, init_carry):
-        batched_network = jax.vmap(network)
+    TODO write docstring
+    """
+    @ft.partial(eqx.filter_pmap, in_axes=(None, 0), backend="cpu")
+    def environment_interaction(network, init_carry):
+        batchsize = init_carry[1].shape[0]
+        batched_network = eqx.filter_vmap(network)
         nn_params = eqx.filter(network, eqx.is_inexact_array)
         
         def loop_fn(carry, _):

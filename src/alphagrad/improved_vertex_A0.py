@@ -14,19 +14,6 @@ import equinox as eqx
 
 from tqdm import tqdm
 
-from graphax import VertexGame, make_vertex_game_state
-from graphax.core import forward, reverse
-from graphax.examples import construct_random, \
-							construct_Helmholtz, \
-							construct_LIF
-
-from alphagrad.utils import A0_loss, get_masked_logits, preprocess_data
-from alphagrad.data import VertexGameGenerator, \
-							make_recurrent_fn, \
-							make_environment_interaction
-from alphagrad.modelzoo import TransformerModel, CNNModel
-from alphagrad.differentiate import differentiate
-
 
 parser = argparse.ArgumentParser()
 
@@ -35,6 +22,9 @@ parser.add_argument("--name", type=str,
 
 parser.add_argument("--gpu", type=str, 
                     default="1", help="GPU identifier.")
+
+parser.add_argument("--num_cores", type=int, 
+                    default=8, help="Number of cores for MCTS.")
 
 parser.add_argument("--seed", type=int,
                     default=1337, help="Random seed.")
@@ -65,8 +55,23 @@ parser.add_argument("--num_outputs", type=int,
 
 args = parser.parse_args()
 
-# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "False"
-# os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=" + str(args.num_cores)
+print(jax.devices())
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "False"
+os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+
+from graphax import VertexGame, VertexGameState, make_vertex_game_state
+from graphax.core import forward, reverse
+from graphax.examples import construct_random, \
+							construct_Helmholtz, \
+							construct_LIF
+
+from alphagrad.utils import A0_loss, get_masked_logits, preprocess_data, postprocess_data
+from alphagrad.data import VertexGameGenerator, \
+							make_recurrent_fn, \
+							make_environment_interaction
+from alphagrad.modelzoo import TransformerModel, CNNModel
+from alphagrad.differentiate import differentiate
 
 # wandb.init("Vertex_AlphaZero")
 # wandb.run.name = args.name
@@ -124,11 +129,11 @@ reward_idx = policy_idx + 1
 split_idxs = (obs_idx, policy_idx, reward_idx)
 
 
-def train_agent(batch_games, network, opt_state, key):
+def train_agent(data, network, opt_state, key):
 	# compute loss gradient compared to tree search targets and update parameters
-	init_carry = (batch_games, jnp.zeros(args.batchsize), key)
-	data = env_interaction(network, args.batchsize, init_carry)
-	data = preprocess_data(data, -2)
+	data = data.reshape(-1, *data.shape[2:])
+	print(data.shape)
+	data = postprocess_data(data, -2)
 
 	obs, search_policy, search_value, _ = jnp.split(data, split_idxs, axis=-1)
 	batchsize = args.batchsize*num_v
@@ -170,14 +175,23 @@ import time
 pbar = tqdm(range(args.episodes))
 rewards = []
 for e in pbar:
+	data_key, env_key, train_key, key = jrand.split(key, 4)
 	# Data wrangling
-	batch_games = game_generator(args.batchsize, key)
-
-	train_key, key = jrand.split(key)
 	start_time = time.time()
-	loss, MODEL, opt_state = eqx.filter_jit(train_agent)(batch_games, MODEL, opt_state, train_key)
+	batch_games = game_generator(args.batchsize, data_key)
 	print(time.time() - start_time)
- 
+
+	start_time = time.time()
+	### BEGIN Code for parallelization
+	init_carry = preprocess_data(batch_games, args.num_cores, env_key)
+	data = env_interaction(MODEL, init_carry)
+	### END code for parallelization
+	print(time.time() - start_time)
+
+	start_time = time.time()
+	loss, MODEL, opt_state = eqx.filter_jit(train_agent)(data, MODEL, opt_state, train_key)	
+	print(time.time() - start_time)
+
 	start_time = time.time()
 	rew = differentiate(MODEL, env_interaction, key, random_game, helmholtz_game)
 	print(time.time() - start_time)

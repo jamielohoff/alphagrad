@@ -11,6 +11,7 @@ import chex
 import optax
 import equinox as eqx
 
+from graphax import VertexGameState
 
 # find good value for regularizer
 @ft.partial(jax.vmap, in_axes=(None, 0, 0, 0, None, 0))
@@ -55,8 +56,9 @@ def get_masked_logits(logits, state, num_intermediates):
 
 
 @ft.partial(jax.vmap, in_axes=(0, None))
-def preprocess_data(data: chex.Array, idx: int = 0) -> chex.Array:
-    """TODO add documentation
+def postprocess_data(data: chex.Array, idx: int = 0) -> chex.Array:
+    """
+	TODO add documentation
 
     Args:
         data (_type_): _description_
@@ -67,4 +69,23 @@ def preprocess_data(data: chex.Array, idx: int = 0) -> chex.Array:
     """
     final_rew = data.at[-1, idx].get()
     return data.at[:, idx].set(final_rew)
+
+
+def preprocess_data(batch_games, num_cores, key):
+	"""
+	TODO add docstring
+	"""
+	batchsize = len(batch_games.t)
+	pmap_batchsize = batchsize // num_cores
+	keys = jrand.split(key, num_cores)
+	shape = batch_games.edges.shape[1:]
+	ts = batch_games.t.reshape(num_cores, pmap_batchsize, -1)
+	info = batch_games.info.reshape(num_cores, pmap_batchsize, -1)
+	edges = batch_games.edges.reshape(num_cores, pmap_batchsize, *shape)
+	vertices = batch_games.vertices.reshape(num_cores, pmap_batchsize, -1)
+	batch_games = VertexGameState(t=ts,
+			       				info=info,
+								edges=edges,
+								vertices=vertices)
+	return (batch_games, jnp.zeros((num_cores, pmap_batchsize)), keys)
 	

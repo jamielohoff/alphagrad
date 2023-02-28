@@ -16,7 +16,6 @@ from graphax import GraphInfo
 class CNNModel(eqx.Module):
     conv1: eqx.nn.Conv2d
     conv2: eqx.nn.Conv2d
-    conv3: eqx.nn.Conv2d
     
     policy_head: eqx.nn.MLP
     value_head: eqx.nn.MLP
@@ -41,7 +40,6 @@ class CNNModel(eqx.Module):
         # Defining convolutional embedding
         self.conv1 = eqx.nn.Conv2d(1, 16, 7, key=keys[0])
         self.conv2 = eqx.nn.Conv2d(16, 32, kernel_size, key=keys[1])
-        self.conv3 = eqx.nn.Conv2d(32, 64, kernel_size, key=keys[2])
 
         # Defining policy head
         self.policy_head = eqx.nn.MLP(288, num_v, policy_ff_dim, num_policy_layers, key=keys[3])
@@ -53,7 +51,6 @@ class CNNModel(eqx.Module):
         xs = xs[jnp.newaxis, :, :]
         xs = self.conv1(xs)
         xs = self.conv2(xs)
-        # xs = self.conv3(xs)
         
         xs = xs.flatten()
         value = self.value_head(xs)
