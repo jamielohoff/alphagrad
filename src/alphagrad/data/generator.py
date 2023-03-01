@@ -1,3 +1,4 @@
+import functools as ft
 from typing import Sequence
 
 import jax
@@ -44,11 +45,11 @@ class VertexGameGenerator:
         
         keys = jrand.split(key, num_games)
         for key in keys:
-            fraction = jrand.uniform(key)
+            fraction = jrand.uniform(key, minval=0.2, maxval=0.8)
             edges, info = construct_random(key, info, fraction=fraction)
             self.info_repository.append(info)
             self.edge_repository.append(edges)
-
+            
     def __call__(self, 
                 batchsize: int, 
                 key: chex.PRNGKey = None) -> VertexGameState:

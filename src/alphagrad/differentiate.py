@@ -24,6 +24,5 @@ def differentiate(network, env_interaction_fn, key, *games):
 	batch_games = batch_vertex_game_states(games)
 	init_carry = preprocess_data(batch_games, 2, key)
 	output = env_interaction_fn(network, init_carry)
-	output = output.reshape(-1, *output.shape[2:])
-	return output[:, -1, -2]
+	return output[:, :, -1, -2].flatten()
 

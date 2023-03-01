@@ -33,9 +33,9 @@ class CNNModel(eqx.Module):
         super().__init__()
         keys = jrand.split(key, 5)
         
-        num_i = info.num_inputs
-        num_v = info.num_intermediates
-        num_o = info.num_outputs
+        num_i = 4 # info.num_inputs
+        num_v = 11 # info.num_intermediates
+        num_o = 4 # info.num_outputs
                 
         # Defining convolutional embedding
         self.conv1 = eqx.nn.Conv2d(1, 16, 7, key=keys[0])

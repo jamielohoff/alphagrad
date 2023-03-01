@@ -20,8 +20,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--name", type=str, 
                     default="Vertex_A0_test", help="Name of the experiment.")
 
-parser.add_argument("--gpu", type=str, 
-                    default="1", help="GPU identifier.")
+parser.add_argument("--gpu", type=int, 
+                    default=0, help="GPU identifier.")
 
 parser.add_argument("--num_cores", type=int, 
                     default=8, help="Number of cores for MCTS.")
@@ -39,10 +39,10 @@ parser.add_argument("--num_simulations", type=int,
                     default=25, help="Number of simulations.")
 
 parser.add_argument("--batchsize", type=int, 
-                    default=32, help="Learning batchsize.")
+                    default=128, help="Learning batchsize.")
 
 parser.add_argument("--regularization", type=float, 
-                    default=0., help="Contribution of L2 regularization.")
+                    default=1e-2, help="Contribution of L2 regularization.")
 
 parser.add_argument("--lr", type=float, 
                     default=2e-4, help="Learning rate.")
@@ -56,11 +56,15 @@ parser.add_argument("--num_outputs", type=int,
 args = parser.parse_args()
 
 os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=" + str(args.num_cores)
-print(jax.devices())
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "False"
-os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-
-from graphax import VertexGame, VertexGameState, make_vertex_game_state
+cpu_devices = jax.devices("cpu")
+gpu_devices = jax.devices("gpu")
+print("cpu", cpu_devices)
+print("gpu", gpu_devices)
+# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform" # increases performance enormously!
+# os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
+import graphax
+from graphax import VertexGame, make_vertex_game_state
 from graphax.core import forward, reverse
 from graphax.examples import construct_random, \
 							construct_Helmholtz, \
@@ -70,28 +74,30 @@ from alphagrad.utils import A0_loss, get_masked_logits, preprocess_data, postpro
 from alphagrad.data import VertexGameGenerator, \
 							make_recurrent_fn, \
 							make_environment_interaction
-from alphagrad.modelzoo import TransformerModel, CNNModel
+from alphagrad.modelzoo import CNNModel, TransformerModel
 from alphagrad.differentiate import differentiate
 
-# wandb.init("Vertex_AlphaZero")
-# wandb.run.name = args.name
-# wandb.config = vars(args)
+wandb.init("Vertex_AlphaZero")
+wandb.run.name = args.name
+wandb.config = vars(args)
 
 NUM_INPUTS = args.num_inputs
 NUM_INTERMEDIATES = args.num_actions
 NUM_OUTPUTS = args.num_outputs
-NUM_GAMES = 64
+NUM_GAMES = 256
 SHAPE = (NUM_INPUTS+NUM_INTERMEDIATES, NUM_INTERMEDIATES+NUM_OUTPUTS)
 
 key = jrand.PRNGKey(args.seed)
 edges, INFO = construct_Helmholtz() # construct_LIF() # 
 state = make_vertex_game_state(INFO, edges)
 env = VertexGame(state)
-
+INFO = graphax.GraphInfo(4, 11, 4, 128)
 
 nn_key, key = jrand.split(key, 2)
 subkeys = jrand.split(nn_key, 4)
-MODEL = TransformerModel(INFO, 64, 32, 7, 1, 6, key=key) # CNNModel(INFO, 7, key=key) # 
+MODEL = TransformerModel(INFO, 128, 64, 7, 3, 6, key=key)
+
+
 
 
 batched_step = jax.vmap(env.step)
@@ -129,10 +135,10 @@ reward_idx = policy_idx + 1
 split_idxs = (obs_idx, policy_idx, reward_idx)
 
 
+import time
 def train_agent(data, network, opt_state, key):
-	# compute loss gradient compared to tree search targets and update parameters
+    # data movement is a bottleneck
 	data = data.reshape(-1, *data.shape[2:])
-	print(data.shape)
 	data = postprocess_data(data, -2)
 
 	obs, search_policy, search_value, _ = jnp.split(data, split_idxs, axis=-1)
@@ -158,7 +164,8 @@ edges, info = construct_Helmholtz()
 helmholtz_game = make_vertex_game_state(info, edges)
 
 gkey, key = jrand.split(key)
-edges, info = construct_random(gkey, INFO, fraction=.5)
+edges, info = construct_random(gkey, INFO, fraction=.35)
+print(edges)
 random_game = make_vertex_game_state(info, edges)
 
 
@@ -171,30 +178,27 @@ reverse_edges = copy.deepcopy(edges)
 _, ops = reverse(reverse_edges, info)
 print("reverse-mode:", ops)
 
-import time
+
 pbar = tqdm(range(args.episodes))
 rewards = []
 for e in pbar:
 	data_key, env_key, train_key, key = jrand.split(key, 4)
-	# Data wrangling
-	start_time = time.time()
 	batch_games = game_generator(args.batchsize, data_key)
-	print(time.time() - start_time)
 
-	start_time = time.time()
 	### BEGIN Code for parallelization
+	start_time = time.time()
 	init_carry = preprocess_data(batch_games, args.num_cores, env_key)
 	data = env_interaction(MODEL, init_carry)
+	print("mcts", time.time() - start_time)
 	### END code for parallelization
-	print(time.time() - start_time)
 
 	start_time = time.time()
-	loss, MODEL, opt_state = eqx.filter_jit(train_agent)(data, MODEL, opt_state, train_key)	
-	print(time.time() - start_time)
+	loss, MODEL, opt_state = eqx.filter_jit(train_agent, device=gpu_devices[args.gpu], donate="all")(data, MODEL, opt_state, train_key)	
+	print("train", time.time() - start_time)
 
 	start_time = time.time()
 	rew = differentiate(MODEL, env_interaction, key, random_game, helmholtz_game)
-	print(time.time() - start_time)
-	# wandb.log({"loss": loss.tolist(), "# computations": rew[0].tolist()})
+	print("diff", time.time() - start_time)
+	wandb.log({"loss": loss.tolist(), "# computations": rew[0].tolist()})
 	pbar.set_description(f"loss: {loss}, return: {rew}")
 
