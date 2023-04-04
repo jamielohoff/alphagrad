@@ -55,10 +55,11 @@ parser.add_argument("--num_outputs", type=int,
 
 args = parser.parse_args()
 
-os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=" + str(args.num_cores)
-print(jax.devices())
+# os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=" + str(args.num_cores)
+print("cpu", jax.devices("cpu"))
+print("gpu", jax.devices("gpu"))
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "False"
-os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+# os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
 from graphax import VertexGame, VertexGameState, make_vertex_game_state
 from graphax.core import forward, reverse
