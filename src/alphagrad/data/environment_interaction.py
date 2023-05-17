@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Sequence
 import functools as ft
 
 import jax
@@ -96,14 +96,23 @@ def make_environment_interaction(info: GraphInfo,
             params = (batchsize, nn_params)
             qtransform = ft.partial(mctx.qtransform_completed_by_mix_value,
                                     use_mixed_value=True)
-            policy_output = mctx.muzero_policy(params,
-                                                subkey,
-                                                root,
-                                                recurrent_fn,
-                                                num_simulations,
-                                                invalid_actions=mask,
-                                                qtransform=qtransform,
-                                                **kwargs)
+            # policy_output = mctx.muzero_policy(params,
+            #                                     subkey,
+            #                                     root,
+            #                                     recurrent_fn,
+            #                                     num_simulations,
+            #                                     invalid_actions=mask,
+            #                                     qtransform=qtransform,
+            #                                     **kwargs)
+            
+            policy_output = mctx.gumbel_muzero_policy(params,
+                                                        subkey,
+                                                        root,
+                                                        recurrent_fn,
+                                                        num_simulations,
+                                                        invalid_actions=mask,
+                                                        qtransform=qtransform,
+                                                        gumbel_scale=0.)
 
             # tree search derived targets for policy and value function
             search_policy = policy_output.action_weights
