@@ -1,6 +1,6 @@
 import numpy as np
 
-from alphagrad.data.replay_buffer import AlphaGradReplayMemory
+from legacy.replay_buffer import AlphaGradReplayMemory
 
 replay_memory = AlphaGradReplayMemory(100, (4, 11, 4))
 edges = np.random.randint(low=0, high=10, size=(11, 15, 15))

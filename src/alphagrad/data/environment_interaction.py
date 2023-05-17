@@ -1,8 +1,7 @@
-from typing import Callable, Sequence
+from typing import Callable
 import functools as ft
 
 import jax
-import jax.nn as jnn
 import jax.lax as lax
 import jax.numpy as jnp
 import jax.random as jrand
@@ -13,8 +12,9 @@ import mctx
 import equinox as eqx
 
 from graphax import GraphInfo
+from ..utils import symexp
 
-# TODO needs adjustment to new auto-regressive models!
+
 # TODO add documentation
 def make_recurrent_fn(nn_model: chex.PyTreeDef,
                     info: GraphInfo, 
@@ -43,7 +43,7 @@ def make_recurrent_fn(nn_model: chex.PyTreeDef,
         keys = jrand.split(rng_key, batchsize)
         output = batch_network(next_obs, keys)
         policy_logits = output[:, 1:]
-        value = output[:, 0]
+        value = symexp(output[:, 0]) # symexp for reward scaling since value head is trained on symlog(value)
         masked_logits = batched_get_masked_logits(policy_logits, 
                                                 state, 
                                                 info.num_intermediates)
@@ -63,12 +63,11 @@ def make_environment_interaction(info: GraphInfo,
                                 num_simulations: int,
                                 recurrent_fn: Callable,
                                 batched_step: Callable,
-                                batched_one_hot: Callable, 
+                                batched_one_hot: Callable,
                                 **kwargs) -> Callable:
     """
     TODO write docstring
     """
-    @ft.partial(eqx.filter_pmap, in_axes=(None, 0), backend="cpu")
     def environment_interaction(network, init_carry):
         batchsize = init_carry[1].shape[0]
         batched_network = eqx.filter_vmap(network)
@@ -85,7 +84,7 @@ def make_environment_interaction(info: GraphInfo,
             keys = jrand.split(key, batchsize)
             output = batched_network(obs, keys)
             policy_logits = output[:, 1:]
-            values = output[:, 0]
+            values = symexp(output[:, 0]) # symexp for reward scaling since value head is trained on symlog(value)
 
             root = mctx.RootFnOutput(prior_logits=policy_logits,
                                     value=values,
@@ -96,6 +95,7 @@ def make_environment_interaction(info: GraphInfo,
             params = (batchsize, nn_params)
             qtransform = ft.partial(mctx.qtransform_completed_by_mix_value,
                                     use_mixed_value=True)
+            
             # policy_output = mctx.muzero_policy(params,
             #                                     subkey,
             #                                     root,
@@ -103,6 +103,10 @@ def make_environment_interaction(info: GraphInfo,
             #                                     num_simulations,
             #                                     invalid_actions=mask,
             #                                     qtransform=qtransform,
+            #                                     dirichlet_fraction=.75,
+            #                                     pb_c_init=2000.,
+            #                                     pb_c_base=4.,
+            #                                     dirichlet_alpha=.6,
             #                                     **kwargs)
             
             policy_output = mctx.gumbel_muzero_policy(params,
@@ -112,7 +116,7 @@ def make_environment_interaction(info: GraphInfo,
                                                         num_simulations,
                                                         invalid_actions=mask,
                                                         qtransform=qtransform,
-                                                        gumbel_scale=0.)
+                                                        gumbel_scale=0.2)
 
             # tree search derived targets for policy and value function
             search_policy = policy_output.action_weights
@@ -131,7 +135,7 @@ def make_environment_interaction(info: GraphInfo,
                                                             axis=1)
 
         _, output = lax.scan(loop_fn, init_carry, None, length=info.num_intermediates)
-        return jnp.stack(output).transpose(1, 0, 2)
+        return output.transpose(1, 0, 2)
     
     return environment_interaction
 

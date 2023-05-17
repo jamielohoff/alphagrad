@@ -41,16 +41,3 @@ def swap_inputs(edges: np.ndarray, i: int, j: int, info: GraphInfo) -> np.ndarra
 def swap_outputs(edges: np.ndarray, i: int, j: int, info: GraphInfo) -> np.ndarray:
     return swap_cols(edges, i-1, j-1)
 
-
-def _prune_sample(t: int, sample: np.ndarray) -> np.ndarray:
-    sample[t:, :] = 0
-    return sample
-
-
-def prune_samples(samples: np.ndarray, 
-                num_intermediates: int) -> np.ndarray:
-    batchsize = samples.shape[0]
-    ts = np.random.randint(1, num_intermediates+1, size=(batchsize,))
-    batch = np.stack([_prune_sample(t, s) for t, s in zip(ts, samples)])
-    return batch
-

@@ -1,4 +1,4 @@
-FROM nvidia/cuda:11.4.1-cudnn8-devel-ubuntu20.04
+FROM nvidia/cuda:12.0.1-cudnn8-devel-ubuntu22.04
 
 USER root
 
@@ -19,7 +19,7 @@ RUN echo "user ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/90-user
 
 # Installing all the default JAX stuff
 RUN pip3 install numpy scipy pandas cmake matplotlib tqdm seaborn wandb
-RUN pip3 install "jax[cuda11_cudnn82]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+RUN pip3 install "jax[cuda12_local]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 RUN pip3 install chex equinox mctx optax
 
 # Creating Projects folder in home folder of user
