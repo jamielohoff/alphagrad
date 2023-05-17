@@ -19,7 +19,7 @@ import torchvision.transforms as tf
 from torchvision.datasets import CIFAR10
 from torch.utils.data import DataLoader
 
-from alphagrad.transformer.axial import AxialTransformerBlock
+from legacy.axial import AxialTransformerBlock
 
 parser = argparse.ArgumentParser()
 

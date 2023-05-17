@@ -9,10 +9,6 @@ import chex
 import equinox as eqx
 
 
-shift_right = jax.vmap(lambda x: jnp.roll(x, 1, axis=1))
-shift_down = jax.vmap(lambda x: jnp.roll(x, 1, axis=0))
-
-
 def make_mask(size, num_heads): 
     mask = jnp.tril(jnp.ones((size, size)))
     return jnp.tile(mask[jnp.newaxis, :, :],(num_heads, 1, 1))

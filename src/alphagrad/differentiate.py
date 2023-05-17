@@ -1,13 +1,14 @@
+from typing import Sequence
+
 import jax
 import jax.numpy as jnp
-
-import equinox as eqx
 
 from graphax import VertexGameState
 from alphagrad.utils import preprocess_data
 
+
 # TODO documentation
-def batch_vertex_game_states(games, ):
+def batch_vertex_game_states(games: Sequence[VertexGameState]) -> VertexGameState:
 	batchsize = len(games)
 	ts = jnp.zeros(batchsize)
 	infos = jnp.stack([jnp.array(game.info) for game in games])
@@ -22,7 +23,7 @@ def batch_vertex_game_states(games, ):
 # TODO documentation
 def differentiate(network, env_interaction_fn, key, *games):
 	batch_games = batch_vertex_game_states(games)
-	init_carry = preprocess_data(batch_games, 2, key)
+	init_carry = preprocess_data(batch_games, key)
 	output = env_interaction_fn(network, init_carry)
-	return output[:, :, -1, -2].flatten()
+	return output[:, -1, -2].flatten()
 
