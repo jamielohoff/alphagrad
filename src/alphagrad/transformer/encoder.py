@@ -45,7 +45,8 @@ class EncoderLayer(eqx.Module):
                                                     in_dim, 
                                                     key=keys[0],
                                                     **kwargs)
-        self.attn_norm = eqx.nn.LayerNorm(in_dim)
+        attn_norm = eqx.nn.LayerNorm(in_dim)
+        self.attn_norm = jax.vmap(attn_norm, in_axes=(0,))
         self.attn_dropout = eqx.nn.Dropout(p=dropout)
         
         # Feed-forward block
@@ -102,7 +103,7 @@ class Encoder(eqx.Module):
         super().__init__()
         keys = jrand.split(key, num_layers)
         self.num_layers = num_layers
-        self.layers = [EncoderLayer(num_heads, in_dim, ff_dim, dropout, use_bias, key=k, **kwargs) for k in keys]
+        self.layers = [EncoderLayer(num_heads, in_dim, ff_dim, dropout, use_bias, key=key, **kwargs) for key in keys]
 
     def __call__(self, 
                 xs: chex.Array, 
