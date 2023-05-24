@@ -16,7 +16,7 @@ import torchvision.transforms as tf
 from torchvision.datasets import CIFAR10
 from torch.utils.data import DataLoader
 
-from alphagrad.transformer.encoder import Encoder
+from alphagrad.transformer._encoder import Encoder
 
 parser = argparse.ArgumentParser()
 

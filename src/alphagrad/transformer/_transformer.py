@@ -10,8 +10,8 @@ import jax.random as jrand
 import chex
 import equinox as eqx
 
-from .encoder import Encoder
-from .decoder import Decoder
+from ._encoder import Encoder
+from ._decoder import Decoder
 
 
 class Transformer(eqx.Module):

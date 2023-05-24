@@ -12,7 +12,7 @@ import chex
 import optax
 import equinox as eqx
 
-from alphagrad.transformer.encoder import Encoder
+from alphagrad.transformer._encoder import Encoder
 
 parser = argparse.ArgumentParser()
 
