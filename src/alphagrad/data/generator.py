@@ -11,7 +11,7 @@ import chex
 
 from graphax import GraphInfo, VertexGameState, clean, embed
 from graphax.examples import make_random
-from graphax.transforms import safe_preeliminations_gpu
+from graphax.transforms import safe_preeliminations_gpu, compress_graph
 
 
 def to_jnp(info: GraphInfo) -> chex.Array:
@@ -71,6 +71,7 @@ class VertexGameGenerator:
             edges, info = make_random(key, info, fraction=fraction)
             edges, info = clean(edges, info)
             edges, _info = safe_preeliminations_gpu(edges, info)
+            edges, _info = compress_graph(edges, _info)
             
             state_mask, attn_mask = get_masks(_info, info)
             self.state_repository.append(state_mask)
