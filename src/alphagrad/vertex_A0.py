@@ -53,7 +53,7 @@ parser.add_argument("--num_inputs", type=int,
                     default=10, help="Number input variables.")
 
 parser.add_argument("--num_actions", type=int, 
-                    default=15, help="Number of actions.")
+                    default=30, help="Number of actions.")
 
 parser.add_argument("--num_outputs", type=int, 
                     default=5, help="Number of output variables.")
@@ -69,7 +69,6 @@ gpu_devices = jax.devices("gpu")
 print("gpu", gpu_devices)
 
 from graphax import VertexGame, make_vertex_game_state, make_graph_info, embed
-from graphax.core import forward_gpu, reverse_gpu
 from graphax.examples import make_Helmholtz
 
 from alphagrad.utils import (A0_loss,
@@ -83,6 +82,7 @@ from alphagrad.data import (VertexGameGenerator,
 
 from alphagrad.axial_transformer import AxialTransformerModel
 from alphagrad.resnet import ResNet34
+from alphagrad.sequential_transformer import SequentialTransformerModel
 from alphagrad.differentiate import differentiate
 
 wandb.init("Vertex_AlphaZero")
@@ -122,8 +122,7 @@ benchmark_games, names = make_benchmark_games(key, INFO)
 # print("random funnel", nops)
 
 nn_key, key = jrand.split(key, 2)
-subkeys = jrand.split(nn_key, 4)
-MODEL = AxialTransformerModel(INFO, 128, 5, 1, key=key)
+MODEL = SequentialTransformerModel(INFO, 3, 2, key=nn_key)
 
 batched_step = jax.vmap(env.step)
 batched_reset = jax.vmap(env.reset)
@@ -210,9 +209,9 @@ pbar = tqdm(range(args.num_episodes))
 rewards = []
 for e in pbar:
 	data_key, env_key, train_key, key = jrand.split(key, 4)
-	games = game_generator(args.batchsize, 
-                        num_devices=jax.local_device_count(), 
-                        key=data_key)
+	games, attn_masks = game_generator(args.batchsize, 
+										num_devices=jax.local_device_count(), 
+										key=data_key)
 
 	start_time = time.time()
 	losses, aux, models, opt_states = train_agent(games, MODEL, opt_state, train_key)	

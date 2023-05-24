@@ -44,14 +44,17 @@ class SequentialTransformer(eqx.Module):
         self.policy_head = MLP(size, seq_len, policy_ff_dims, key=p_key)
         self.value_head = MLP(size, 1, value_ff_dims, key=v_key)
         
-    def __call__(self, xs: chex.Array, key: chex.PRNGKey = None) -> chex.Array:
-        xs = self.pos_enc(xs)
-        xs = self.encoder(xs, key=key)
+    def __call__(self, 
+                xs: chex.Array, 
+                mask: chex.Array = None, 
+                key: chex.PRNGKey = None) -> chex.Array:
+        xs = self.pos_enc(xs).T
+        xs = self.encoder(xs, mask=mask, key=key).T
         # TODO change this part of the architecture?
         xs = xs.flatten()
         policy = self.policy_head(xs)
         value = self.value_head(xs)
-        return jnp.concatenate((policy, value))
+        return jnp.concatenate((value, policy))
 
 
 class SequentialTransformerModel(eqx.Module):
@@ -62,14 +65,14 @@ class SequentialTransformerModel(eqx.Module):
                 info: GraphInfo,
                 num_layers: int,
                 num_heads: int,
-                kernel_size: int = 5, 
-                stride: int = 1, 
+                kernel_size: int = 7, 
+                stride: int = 3, 
                 key: chex.PRNGKey = None, 
                 **kwargs) -> None:
         super().__init__()
-        embedding = eqx.nn.Conv1d(1, 1, kernel_size, stride, key=key)
-        self.embedding = jax.vmap(embedding, in_axes=(2,))
-        in_dim = (info.num_inputs+info.num_intermediates)-kernel_size+1
+        num_intermediates = info.num_intermediates
+        self.embedding = eqx.nn.Conv1d(num_intermediates, num_intermediates, kernel_size, stride, key=key)
+        in_dim = ((info.num_inputs+info.num_intermediates)-kernel_size)//stride+1
         self.transformer = SequentialTransformer(in_dim,
                                                 info.num_intermediates, 
                                                 num_layers, 
@@ -77,14 +80,18 @@ class SequentialTransformerModel(eqx.Module):
                                                 key=key, 
                                                 **kwargs)
     
-    def __call__(self, xs: chex.Array, key: chex.PRNGKey = None) -> chex.Array:
-        embeddings = self.embedding(xs[None, :, :]).squeeze()
-        return self.transformer(embeddings, key=key)
+    def __call__(self, 
+                xs: chex.Array,
+                mask: chex.Array, 
+                key: chex.PRNGKey = None) -> chex.Array:
+        embeddings = self.embedding(xs.T).T
+        return self.transformer(embeddings, mask=mask, key=key)
 
 key = jrand.PRNGKey(42)
-info = make_graph_info([4, 10, 4])
+info = make_graph_info([10, 30, 5])
+mask = jnp.zeros((2, 30, 30), dtype=jnp.float32)
 tf = SequentialTransformerModel(info, 1, 2, key=key)    
-edges = jnp.ones((14, 10))
+edges = jnp.ones((40, 30))
 print(edges)
-print(tf(edges, key=key).shape)
+print(tf(edges, mask=mask, key=key).shape)
     

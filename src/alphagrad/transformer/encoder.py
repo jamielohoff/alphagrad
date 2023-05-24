@@ -50,6 +50,8 @@ class EncoderLayer(eqx.Module):
         self.attn_dropout = eqx.nn.Dropout(p=dropout)
         
         # Feed-forward block
+        ff_norm = eqx.nn.LayerNorm(in_dim)
+        self.ff_norm = jax.vmap(ff_norm, in_axes=(0,))
         ff_layer1 = eqx.nn.Linear(in_dim, 
                                     ff_dim, 
                                     use_bias=use_bias, 
@@ -62,7 +64,6 @@ class EncoderLayer(eqx.Module):
                                     key=keys[2])
         self.ff_layer2 = jax.vmap(ff_layer2, in_axes=(0,))
 
-        self.ff_norm = eqx.nn.LayerNorm(in_dim)
         self.ff_dropout = eqx.nn.Dropout(p=dropout)
         self.output_activation_fn = eqx.nn.Lambda(output_activation_fn)
 
