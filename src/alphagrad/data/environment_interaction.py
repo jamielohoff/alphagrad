@@ -68,7 +68,7 @@ def make_environment_interaction(info: GraphInfo,
     """
     TODO write docstring
     """
-    def environment_interaction(network, init_carry):
+    def environment_interaction(network, attn_masks, init_carry):
         batchsize = init_carry[1].shape[0]
         batched_network = eqx.filter_vmap(network)
         nn_params = eqx.filter(network, eqx.is_inexact_array)
@@ -82,7 +82,7 @@ def make_environment_interaction(info: GraphInfo,
             mask = one_hot_state.sum(axis=1)
 
             keys = jrand.split(key, batchsize)
-            output = batched_network(obs, keys)
+            output = batched_network(obs, attn_masks, keys)
             policy_logits = output[:, 1:]
             values = symexp(output[:, 0]) # symexp for reward scaling since value head is trained on symlog(value)
 

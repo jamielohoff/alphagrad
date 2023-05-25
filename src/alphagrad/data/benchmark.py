@@ -14,7 +14,6 @@ from graphax.examples import (make_LIF,
                               make_adaptive_LIF, 
                               make_Helmholtz, 
                               make_lighthouse, 
-                              make_free_energy, 
                               make_hole,
                               make_scalar_assignment_tree,
                               make_random)

@@ -143,7 +143,7 @@ env_interaction = make_environment_interaction(INFO,
 												temperature=0)
 
 diff_env_interaction = make_environment_interaction(INFO, 
-													50,
+													25,
 													recurrent_fn,
 													batched_step,
 													batched_one_hot,
@@ -162,26 +162,21 @@ reward_idx = policy_idx + 1
 split_idxs = (obs_idx, policy_idx, reward_idx)
 
 
-def tree_search(games, network, key):
+def tree_search(games, attn_masks, network, key):
 	init_carry = preprocess_data(games, key)
-	data = env_interaction(network, init_carry)
+	data = env_interaction(network, attn_masks, init_carry)
 	return postprocess_data(data)
 
 select_first = lambda x: x[0] if isinstance(x, jax.Array) else x
 parallel_mean = lambda x: lax.pmean(x, "num_devices")
 
 # TODO pretrain the transformer model!!!!!!!!! 
-# as pretraining use the following:
-# input is current computational graph plus an action and let the transformer 
-# predict the next computational graph
-# use sorensen dice loss?
-# identify a good pretraining task
 
 @partial(eqx.filter_pmap, 
-        in_axes=(0, None, None, None),
+        in_axes=(0, 0, None, None, None),
         axis_name="num_devices")
-def train_agent(games, network, opt_state, key):
-	data = tree_search(games, network, key)
+def train_agent(games, attn_masks, network, opt_state, key):
+	data = tree_search(games, attn_masks, network, key)
 	obs, search_policy, search_value, _ = jnp.split(data, split_idxs, axis=-1)
 	search_policy = search_policy.reshape(BS, NUM_INTERMEDIATES)
 	search_value = search_value.reshape(BS, 1)
@@ -214,7 +209,7 @@ for e in pbar:
 										key=data_key)
 
 	start_time = time.time()
-	losses, aux, models, opt_states = train_agent(games, MODEL, opt_state, train_key)	
+	losses, aux, models, opt_states = train_agent(games, attn_masks, MODEL, opt_state, train_key)	
 	print("train", time.time() - start_time)
 
 	loss = losses[0]

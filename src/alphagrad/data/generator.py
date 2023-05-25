@@ -28,9 +28,9 @@ def get_masks(_info: GraphInfo, info: GraphInfo) -> Tuple[chex.Array, chex.Array
     
     # make attention mask
     in_dim = info.num_inputs + info.num_intermediates
-    attn_zeros = jnp.zeros((in_dim, _info.num_intermediates))
-    attn_ones = jnp.ones((in_dim, d))
-    attn_mask = jnp.concatenate((attn_zeros, attn_ones))
+    attn_ones = jnp.zeros((in_dim, _info.num_intermediates))
+    attn_zeros = jnp.ones((in_dim, d))
+    attn_mask = jnp.concatenate((attn_ones, attn_zeros))
     
     return state_mask, attn_mask
 
