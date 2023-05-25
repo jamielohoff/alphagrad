@@ -58,6 +58,9 @@ parser.add_argument("--num_actions", type=int,
 parser.add_argument("--num_outputs", type=int, 
                     default=5, help="Number of output variables.")
 
+parser.add_argument("--disable_wandb", type=bool,
+                    default=False, help="Use wandb for logging or not.")
+
 parser.add_argument("--test_frequency", type=int,
                     default=5, help="The frequency with which we test the current policy.")
 
@@ -85,9 +88,10 @@ from alphagrad.resnet import ResNet34
 from alphagrad.sequential_transformer import SequentialTransformerModel
 from alphagrad.differentiate import differentiate
 
-wandb.init("Vertex_AlphaZero")
-wandb.run.name = args.name
-wandb.config = vars(args)
+if not args.disable_wandb:
+	wandb.init("Vertex_AlphaZero")
+	wandb.run.name = args.name
+	wandb.config = vars(args)
 
 BS = args.batchsize*args.num_actions // len(gpu_devices)
 NUM_INPUTS = args.num_inputs
@@ -99,7 +103,7 @@ SHAPE = (NUM_INPUTS+NUM_INTERMEDIATES, NUM_INTERMEDIATES+NUM_OUTPUTS)
 key = jrand.PRNGKey(args.seed)
 INFO = make_graph_info([NUM_INPUTS, NUM_INTERMEDIATES, NUM_OUTPUTS])
 edges, info = make_Helmholtz()
-edges, _ = embed(key, edges, info, INFO)
+edges, _ = embed(edges, info, INFO)
 state = make_vertex_game_state(edges, INFO)
 
 env = VertexGame(state)
@@ -207,6 +211,9 @@ for e in pbar:
 	games, attn_masks = game_generator(args.batchsize, 
 										num_devices=jax.local_device_count(), 
 										key=data_key)
+ 
+	print(games.vertices)
+	print(attn_masks)
 
 	start_time = time.time()
 	losses, aux, models, opt_states = train_agent(games, attn_masks, MODEL, opt_state, train_key)	
@@ -217,10 +224,11 @@ for e in pbar:
 	MODEL = jtu.tree_map(select_first, models, is_leaf=eqx.is_inexact_array)
 	opt_state = jtu.tree_map(select_first, opt_states, is_leaf=eqx.is_inexact_array)
 
-	wandb.log({"loss": loss.tolist(),
-            	"policy_loss": aux[0].tolist(),
-             	"value_loss": aux[1].tolist(),
-              	"L2_reg": aux[2].tolist()})
+	if not args.disable_wandb:
+		wandb.log({"loss": loss.tolist(),
+					"policy_loss": aux[0].tolist(),
+					"value_loss": aux[1].tolist(),
+					"L2_reg": aux[2].tolist()})
 
 	if e % args.test_frequency == 0:
 		print(e)
@@ -229,7 +237,8 @@ for e in pbar:
 		print(rews)
 		print("diff", time.time() - start_time)
  
-		num_computations = {name:-nops for name, nops in zip(names, rews.tolist())}
-		wandb.log(num_computations)
+		if not args.disable_wandb:
+			num_computations = {name:-nops for name, nops in zip(names, rews.tolist())}
+			wandb.log(num_computations)
 	pbar.set_description(f"loss: {loss}, return: {rews}")
 

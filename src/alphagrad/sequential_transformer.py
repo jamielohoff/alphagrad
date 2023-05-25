@@ -86,12 +86,4 @@ class SequentialTransformerModel(eqx.Module):
                 key: chex.PRNGKey = None) -> chex.Array:
         embeddings = self.embedding(xs.T).T
         return self.transformer(embeddings, mask=mask, key=key)
-
-key = jrand.PRNGKey(42)
-info = make_graph_info([10, 30, 5])
-mask = jnp.zeros((2, 30, 30), dtype=jnp.float32)
-tf = SequentialTransformerModel(info, 1, 2, key=key)    
-edges = jnp.ones((40, 30))
-print(edges)
-print(tf(edges, mask=mask, key=key).shape)
     
