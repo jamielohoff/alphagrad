@@ -221,10 +221,11 @@ for e in pbar:
 						"policy_loss": aux[0].tolist(),
 						"value_loss": aux[1].tolist(),
 						"L2_reg": aux[2].tolist()})
-
+		loss = 0
 		if counter % args.test_frequency == 0:
 			start_time = time.time()
-			for names, edges, info, vertices, attn_masks in test_graph_dataset:
+			for names, edges, info, vertices, attn_masks in benchmark_dataloader:
+				names = [name.decode("utf-8") for name in names]
 				benchmark_games = make_batched_vertex_game(edges, vertices, attn_masks, num_devices=1)
 				# possibly pmap this?
 				rews = eqx.filter_jit(differentiate)(MODEL, NUM_INTERMEDIATES, diff_env_interaction, key, benchmark_games)
