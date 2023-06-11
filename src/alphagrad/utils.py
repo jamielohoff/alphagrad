@@ -1,5 +1,4 @@
 import functools as ft
-from typing import Callable
 
 import jax
 import jax.nn as jnn
@@ -11,6 +10,7 @@ import jax.tree_util as jtu
 import chex
 import optax
 import equinox as eqx
+import numpy as np
 
 from graphax import VertexGameState
 
@@ -23,19 +23,21 @@ def symexp(x: chex.Array) -> chex.Array:
     return jnp.sign(x)*jnp.exp(jnp.abs(x)-1)
 
 
-@ft.partial(jax.vmap, in_axes=(None, 0, 0, 0, None, None, 0))
+@ft.partial(jax.vmap, in_axes=(None, 0, 0, 0, 0, None, None, 0))
 def _A0_loss(network, 
 			policy_target,
 			value_target,
 			obs,
+			attn_mask,
 			policy_weight,
 			L2_weight,
 			key):
-	output = network(obs, key)
+	output = network(obs, mask=attn_mask, key=key)
 	policy_logits = output[1:]
 	value = output[0:1]
 
-	policy_loss = optax.softmax_cross_entropy(policy_logits, policy_target)
+	policy_log_probs = jnn.log_softmax(policy_logits, axis=-1)
+	policy_loss = optax.kl_divergence(policy_log_probs, policy_target)
 	value_loss = optax.l2_loss(value, symlog(value_target))[0] # added symlog for reward scaling
  
 	params = eqx.filter(network, eqx.is_array)
@@ -48,6 +50,7 @@ def A0_loss(network,
             policy_target, 
             value_target,
             obs, 
+            attn_mask,
             policy_weight,
             L2_weight,
             keys):
@@ -55,6 +58,7 @@ def A0_loss(network,
 						policy_target, 
 						value_target, 
 						obs,
+						attn_mask,
 						policy_weight,
 						L2_weight,
 						keys)
@@ -64,39 +68,62 @@ def A0_loss(network,
 def get_masked_logits(logits, state, num_intermediates):
 	one_hot_state = jnn.one_hot(state.vertices-1, num_intermediates)
 	action_mask = one_hot_state.sum(axis=0)
-	return jnp.where(action_mask == 0, logits, -100000.)
+	return jnp.where(action_mask == 0, logits, jnp.finfo(logits.dtype).min)
 
 
-def postprocess_data(data: chex.Array, idx: int = -2) -> chex.Array:
+@ft.partial(jax.vmap, in_axes=(0,))
+def postprocess_data(data: chex.Array) -> chex.Array:
 	"""
 	TODO add documentation
 
 	Args:
-		data (_type_): _description_
-		idx (int, optional): _description_. Defaults to 0.
+		data (_type_): _description_ 
 
 	Returns:
 		_type_: _description_
 	"""
-	data = data.reshape(-1, *data.shape[2:])
-	final_rew = data.at[-1, idx].get()
-	data = data.at[:, idx].add(-final_rew)
-	return data.at[:, idx].multiply(-1.)
+	idx = jnp.where(data[:, -2] > 0, 1., 0).sum() - 1
+	idx = idx.astype(jnp.int32)
+	final_rew = data.at[-1, -2].get()
+	data = data.at[:, -2].add(-final_rew)
+	return data.at[:, -2].multiply(-1.)
 
 
-def preprocess_data(games, key):
+def make_init_state(games, num_intermediates, key):
 	"""
 	TODO add docstring
 	"""
 	batchsize = len(games.t)
-	shape = games.edges.shape[1:]
-	ts = games.t.reshape(batchsize, -1)
-	info = games.info.reshape(batchsize, -1)
-	edges = games.edges.reshape(batchsize, *shape)
-	vertices = games.vertices.reshape(batchsize, -1)
-	batched_games = VertexGameState(t=ts,
-								info=info,
-								edges=edges,
-								vertices=vertices)
-	return (batched_games, jnp.zeros(batchsize), key)
+	obs = lax.slice_in_dim(games.edges, 0, num_intermediates, axis=-1)
+	return (obs, games, jnp.zeros(batchsize), key)  
+
+
+def make_batched_vertex_game(edges, vertices, attn_masks, num_devices: int = 1) -> VertexGameState:
+	"""
+	TODO add docstring
+	"""
+	batchsize = edges.shape[0]
+	edges = edges.numpy().astype(np.float32)
+	vertices = vertices.numpy().astype(np.float32)
+	attn_masks = attn_masks.numpy().astype(np.float32)
+
+	ts = jnp.array([jnp.where(v > 0, 1, 0).sum() for v in vertices])
+ 
+	if num_devices > 1:
+		batchsize = edges.shape[0]
+		edges_shape = edges.shape[1:]
+		vertices_shape = vertices.shape[1:]
+		mask_shape = attn_masks.shape[1:]
+		per_device_batchsize = batchsize // num_devices
+  
+		ts = ts.reshape(num_devices, per_device_batchsize)
+		edges = edges.reshape(num_devices, per_device_batchsize, *edges_shape)
+		vertices = vertices.reshape(num_devices, per_device_batchsize, *vertices_shape)
+		attn_masks = attn_masks.reshape(num_devices, per_device_batchsize, *mask_shape)
+
+	return VertexGameState(t=ts,
+							edges=edges,
+							vertices=vertices,
+							attn_mask=attn_masks)
+
 

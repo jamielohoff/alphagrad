@@ -58,3 +58,6 @@ MANIFEST
 **/mnist/
 **/cifar10/
 **/__pycache__/
+
+*.hdf5
+*.h5

@@ -12,7 +12,7 @@ import mctx
 import equinox as eqx
 
 from graphax import GraphInfo
-from ..utils import symexp
+from .utils import symexp
 
 
 # TODO add documentation
@@ -33,15 +33,14 @@ def make_recurrent_fn(nn_model: chex.PyTreeDef,
     """
     def recurrent_fn(params, rng_key, actions, state) -> Callable:
         batchsize, nn_params = params
-        next_state, reward, _ = batched_step(state, actions) # dynamics function
-        next_obs = next_state.edges
-
+        next_obs, next_state, reward, _ = batched_step(state, actions) # dynamics function
+        
         # prediction function
         network = jtu.tree_map(lambda x, y: y if eqx.is_inexact_array(x) else x, nn_model, nn_params)
         batch_network = jax.vmap(network)
 
         keys = jrand.split(rng_key, batchsize)
-        output = batch_network(next_obs, keys)
+        output = batch_network(next_obs, next_state.attn_mask, keys)
         policy_logits = output[:, 1:]
         value = symexp(output[:, 0]) # symexp for reward scaling since value head is trained on symlog(value)
         masked_logits = batched_get_masked_logits(policy_logits, 
@@ -68,33 +67,33 @@ def make_environment_interaction(info: GraphInfo,
     """
     TODO write docstring
     """
-    def environment_interaction(network, attn_masks, init_carry):
-        batchsize = init_carry[1].shape[0]
+    num_intermediates = info.num_intermediates
+    def environment_interaction(network, init_carry):
+        batchsize = init_carry[2].shape[0]
         batched_network = eqx.filter_vmap(network)
         nn_params = eqx.filter(network, eqx.is_inexact_array)
         
         def loop_fn(carry, _):
-            state, rews, key = carry
-            obs = state.edges
+            obs, state, rews, key = carry
     
             # create action mask
-            one_hot_state = batched_one_hot(state.vertices-1, info.num_intermediates)
+            one_hot_state = batched_one_hot(state.vertices-1, num_intermediates)
             mask = one_hot_state.sum(axis=1)
 
             keys = jrand.split(key, batchsize)
-            output = batched_network(obs, attn_masks, keys)
+            output = batched_network(obs, state.attn_mask, keys)
             policy_logits = output[:, 1:]
             values = symexp(output[:, 0]) # symexp for reward scaling since value head is trained on symlog(value)
 
-            root = mctx.RootFnOutput(prior_logits=policy_logits,
-                                    value=values,
-                                    embedding=state)
+            root = mctx.RootFnOutput(prior_logits=policy_logits, value=values, embedding=state)
 
             key, subkey = jrand.split(key, 2)
 
             params = (batchsize, nn_params)
             qtransform = ft.partial(mctx.qtransform_completed_by_mix_value,
                                     use_mixed_value=True)
+            
+            # qtransform = mctx.qtransform_by_parent_and_siblings
             
             # policy_output = mctx.muzero_policy(params,
             #                                     subkey,
@@ -116,23 +115,31 @@ def make_environment_interaction(info: GraphInfo,
                                                         num_simulations,
                                                         invalid_actions=mask,
                                                         qtransform=qtransform,
-                                                        gumbel_scale=0.2)
+                                                        gumbel_scale=0.0)
 
             # tree search derived targets for policy and value function
-            search_policy = policy_output.action_weights
+            action_weights = policy_output.action_weights
+            
+            # send the probabilities of all masked actions to 0 and renormalize
+            search_policy = jnp.where(mask, 0., action_weights)
+            norm = jnp.sum(search_policy, axis=-1)
+            norm = jnp.where(norm > 0., norm, 1.)
+            search_policy = search_policy / norm[:, jnp.newaxis]
 
             # always take action recommended by tree search
             action = policy_output.action
 
             # step the environment
-            next_state, rewards, done = batched_step(state, action)
+            next_obs, next_state, rewards, done = batched_step(state, action)
             rews += rewards	
             obs_flattened = obs.reshape(batchsize, -1)
-            return (next_state, rews, key), jnp.concatenate([obs_flattened,
-                                                            search_policy, 
-                                                            rews[:, jnp.newaxis], 
-                                                            done[:, jnp.newaxis]], 
-                                                            axis=1)
+            attn_masks_flattened = state.attn_mask.reshape(batchsize, -1)
+            return (next_obs, next_state, rews, key), jnp.concatenate([obs_flattened,
+                                                                        attn_masks_flattened,
+                                                                        search_policy, 
+                                                                        rews[:, jnp.newaxis], 
+                                                                        done[:, jnp.newaxis]], 
+                                                                        axis=1)
 
         _, output = lax.scan(loop_fn, init_carry, None, length=info.num_intermediates)
         return output.transpose(1, 0, 2)
