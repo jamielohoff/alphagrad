@@ -57,10 +57,10 @@ parser.add_argument("--file_path", type=str,
                     default="./data/_samples", help="Path to the dataset.")
 
 parser.add_argument("--task_file_path", type=str,
-                    default="./data/test_samples", help="Path to the task dataset.")
+                    default="./data/task_samples", help="Path to the task dataset.")
 
 parser.add_argument("--benchmark_file_path", type=str,
-                    default="./data/_samples", help="Path to the benchmark dataset.")
+                    default="./data/benchmark_samples", help="Path to the benchmark dataset.")
 
 parser.add_argument("--num_layers", type=int,
                     default=6, help="Number of transformer blocks.")
@@ -129,7 +129,9 @@ from alphagrad.sequential_transformer import SequentialTransformerModel
 from alphagrad.evaluate import evaluate_tasks, make_reference_values, evaluate_benchmark
 
 if not args.disable_wandb and args.pid == 0:
-	wandb.init("AlphaGrad")
+	wandb.login(key="local-f6fac6ab04ebeaa9cc3f9d44207adbb1745fe4a2", 
+             	host="https://wandb.fz-juelich.de")
+	wandb.init(entity="lohoff")
 	wandb.run.name = args.name
 	wandb.config = vars(args)
 
