@@ -36,7 +36,7 @@ parser.add_argument("--policy_weight", type=float,
                     default=.075, help="Contribution of policy.")
 
 parser.add_argument("--L2_weight", type=float, 
-                    default=1e-5, help="Contribution of L2 regularization.")
+                    default=1e-6, help="Contribution of L2 regularization.")
 
 parser.add_argument("--lr", type=float, 
                     default=1e-4, help="Learning rate.")
@@ -96,9 +96,10 @@ args = parser.parse_args()
 
 
 # Distributed computing
-jax.distributed.initialize(coordinator_address="134.94.166.3:1234",
-                           	num_processes=args.num_nodes,
-                            process_id=args.pid)
+if args.num_nodes > 1:
+	jax.distributed.initialize(coordinator_address="134.94.166.3:1234",
+								num_processes=args.num_nodes,
+								process_id=args.pid)
 
 print(jax.device_count())
 print(jax.local_device_count())
