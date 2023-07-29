@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Sequence
 import functools as ft
 
 import jax
@@ -7,17 +7,16 @@ import jax.numpy as jnp
 import jax.random as jrand
 import jax.tree_util as jtu
 
-import chex
+from chex import PyTreeDef
 import mctx
 import equinox as eqx
 
-from graphax import GraphInfo
 from .utils import symexp
 
+select_params = lambda x, y: y if eqx.is_inexact_array(x) else x
 
 # TODO add documentation
-def make_recurrent_fn(nn_model: chex.PyTreeDef,
-                    info: GraphInfo, 
+def make_recurrent_fn(nn_model: PyTreeDef,
                     batched_step: Callable,
                     batched_get_masked_logits: Callable) -> Callable:
     """TODO write docstring
@@ -33,19 +32,19 @@ def make_recurrent_fn(nn_model: chex.PyTreeDef,
     """
     def recurrent_fn(params, rng_key, actions, state) -> Callable:
         batchsize, nn_params = params
-        next_obs, next_state, reward, _ = batched_step(state, actions) # dynamics function
+        next_state, reward, _ = batched_step(state, actions) # dynamics function
         
         # prediction function
-        network = jtu.tree_map(lambda x, y: y if eqx.is_inexact_array(x) else x, nn_model, nn_params)
+        network = jtu.tree_map(select_params, nn_model, nn_params)
         batch_network = jax.vmap(network)
 
         keys = jrand.split(rng_key, batchsize)
-        output = batch_network(next_obs, next_state.attn_mask, keys)
+        output = batch_network(next_state, keys)
         policy_logits = output[:, 1:]
-        value = symexp(output[:, 0]) # symexp for reward scaling since value head is trained on symlog(value)
-        masked_logits = batched_get_masked_logits(policy_logits, 
-                                                state, 
-                                                info.num_intermediates)
+        
+        # symexp for reward scaling since value head is trained on symlog(value)
+        value = symexp(output[:, 0]) 
+        masked_logits = batched_get_masked_logits(policy_logits, state)
 
         # On a single-player environment, use discount from [0, 1].
         discount = jnp.ones(batchsize)
@@ -58,34 +57,35 @@ def make_recurrent_fn(nn_model: chex.PyTreeDef,
     return recurrent_fn
 
 
-def make_environment_interaction(info: GraphInfo,
+def make_environment_interaction(info: Sequence[int],
                                 num_simulations: int,
                                 recurrent_fn: Callable,
                                 batched_step: Callable,
-                                batched_one_hot: Callable,
                                 **kwargs) -> Callable:
     """
     TODO write docstring
     """
-    num_intermediates = info.num_intermediates
     def environment_interaction(network, init_carry):
-        batchsize = init_carry[2].shape[0]
+        batchsize = init_carry[1].shape[0]
         batched_network = eqx.filter_vmap(network)
         nn_params = eqx.filter(network, eqx.is_inexact_array)
         
         def loop_fn(carry, _):
-            obs, state, rews, key = carry
+            state, rews, key = carry
     
-            # create action mask
-            one_hot_state = batched_one_hot(state.vertices-1, num_intermediates)
-            mask = one_hot_state.sum(axis=1)
+            # Create action mask
+            mask = state.at[:, 1, 0, :].get()
 
             keys = jrand.split(key, batchsize)
-            output = batched_network(obs, state.attn_mask, keys)
+            output = batched_network(state, keys)
             policy_logits = output[:, 1:]
-            values = symexp(output[:, 0]) # symexp for reward scaling since value head is trained on symlog(value)
+            
+            # symexp for reward scaling since value head is trained on symlog(value)
+            values = symexp(output[:, 0]) 
 
-            root = mctx.RootFnOutput(prior_logits=policy_logits, value=values, embedding=state)
+            root = mctx.RootFnOutput(prior_logits=policy_logits, 
+                                    value=values, 
+                                    embedding=state)
 
             key, subkey = jrand.split(key, 2)
 
@@ -130,18 +130,16 @@ def make_environment_interaction(info: GraphInfo,
             action = policy_output.action
 
             # step the environment
-            next_obs, next_state, rewards, done = batched_step(state, action)
+            next_state, rewards, done = batched_step(state, action)
             rews += rewards	
-            obs_flattened = obs.reshape(batchsize, -1)
-            attn_masks_flattened = state.attn_mask.reshape(batchsize, -1)
-            return (next_obs, next_state, rews, key), jnp.concatenate([obs_flattened,
-                                                                        attn_masks_flattened,
-                                                                        search_policy, 
-                                                                        rews[:, jnp.newaxis], 
-                                                                        done[:, jnp.newaxis]], 
-                                                                        axis=1)
+            state_flattened = state.reshape(batchsize, -1)
+            return (next_state, rews, key), jnp.concatenate([state_flattened,
+                                                            search_policy, 
+                                                            rews[:, jnp.newaxis], 
+                                                            done[:, jnp.newaxis]], 
+                                                            axis=1)
 
-        _, output = lax.scan(loop_fn, init_carry, None, length=info.num_intermediates)
+        _, output = lax.scan(loop_fn, init_carry, None, length=info[1])
         return output.transpose(1, 0, 2)
     
     return environment_interaction

@@ -58,6 +58,8 @@ MANIFEST
 **/mnist/
 **/cifar10/
 **/__pycache__/
+**/checkpoints/
 
 *.hdf5
 *.h5
+*.eqx
