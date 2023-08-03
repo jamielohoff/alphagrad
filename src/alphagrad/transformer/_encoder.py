@@ -34,7 +34,7 @@ class EncoderLayer(eqx.Module):
                 ff_dim: int, 
                 dropout: float = .1,
                 use_bias: bool = False,
-                ff_activation_fn: Callable = jnn.relu,
+                ff_activation_fn: Callable = jnn.swish,
                 output_activation_fn: Callable = lambda x: x, *,
                 key: chex.PRNGKey, 
                 **kwargs) -> None:

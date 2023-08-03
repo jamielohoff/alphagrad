@@ -15,7 +15,7 @@ class MLP(eqx.Module):
                 in_size: int,
                 out_size: int,
                 layers: Sequence[int],
-                activation: Callable = jnn.relu,
+                activation: Callable = jnn.swish,
                 final_activation: Callable = lambda x: x, 
                 *,
                 key: chex.PRNGKey) -> None:

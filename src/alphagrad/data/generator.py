@@ -13,7 +13,7 @@ parser.add_argument("--seed", type=int,
                     default=123, help="Random seed for graph generation.")
 
 parser.add_argument("--path", type=str, 
-                    default="./samples", help="Path where files should be stored.")
+                    default="./_samples", help="Path where files should be stored.")
 
 parser.add_argument("--prefix", type=str, 
                     default="comp_graph_examples", help="Name prefix of the files.")

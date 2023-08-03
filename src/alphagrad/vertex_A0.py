@@ -21,7 +21,7 @@ parser.add_argument("--gpus", type=str,
                     default="0,1,2,3", help="GPU identifier.")
 
 parser.add_argument("--seed", type=int,
-                    default=1337, help="Random seed.")
+                    default=42, help="Random seed.")
 
 parser.add_argument("--num_episodes", type=int, 
                     default=1000, help="Number of runs on random data.")
@@ -30,13 +30,16 @@ parser.add_argument("--num_simulations", type=int,
                     default=50, help="Number of simulations.")
 
 parser.add_argument("--batchsize", type=int, 
-                    default=768, help="Learning batchsize.")
+                    default=56, help="Learning batchsize.")
 
 parser.add_argument("--policy_weight", type=float, 
                     default=.075, help="Contribution of policy.")
 
 parser.add_argument("--L2_weight", type=float, 
                     default=1e-6, help="Contribution of L2 regularization.")
+
+parser.add_argument("--entropy_weight", type=float, 
+                    default=.1, help="Contribution of entropy regularization.")
 
 parser.add_argument("--lr", type=float, 
                     default=1e-4, help="Learning rate.")
@@ -54,7 +57,7 @@ parser.add_argument("--disable_wandb", action="store_const", const=True,
                     default=False, help="Use wandb for logging or not.")
 
 parser.add_argument("--file_path", type=str,
-                    default="./data/_samples", help="Path to the dataset.")
+                    default="./data/samples", help="Path to the dataset.")
 
 parser.add_argument("--task_file_path", type=str,
                     default="./data/task_samples", help="Path to the task dataset.")
@@ -81,7 +84,7 @@ parser.add_argument("--checkpointing_frequency", type=int,
                     default=500, help="When to create a checkpoint for the model.")
 
 parser.add_argument("--benchmarking_frequency", type=int,
-                    default=25, help="When to create a checkpoint for the model.")
+                    default=100, help="When to create a checkpoint for the model.")
 
 parser.add_argument("--load_model", type=str,
                     default=None, help="Path to the model weights that have to be loaded.")
@@ -131,7 +134,7 @@ from alphagrad.evaluate import evaluate_tasks, make_reference_values, evaluate_b
 if not args.disable_wandb and args.pid == 0:
 	wandb.login(key="local-f6fac6ab04ebeaa9cc3f9d44207adbb1745fe4a2", 
              	host="https://wandb.fz-juelich.de")
-	wandb.init(entity="lohoff")
+	wandb.init(entity="lohoff", project="AlphaGrad")
 	wandb.run.name = args.name
 	wandb.config = vars(args)
 
@@ -151,7 +154,7 @@ MODEL = SequentialTransformerModel(INFO,
 									ff_dim=1024,
 									num_layers_policy=args.num_layers_policy,
 									policy_ff_dims=[1024, 512],
-									value_ff_dims=[512, 128, 32], 
+									value_ff_dims=[512, 256, 64], 
 									key=nn_key)
 if args.load_model is not None:
     MODEL = eqx.tree_deserialise_leaves(args.load_model, MODEL)
@@ -177,15 +180,16 @@ eval_env_interaction = make_environment_interaction(INFO,
 													temperature=0)
 
 graph_dataset = GraphDataset(args.file_path)
+print("Training datset size:", len(graph_dataset))
 task_graph_dataset = GraphDataset(args.task_file_path, include_code=True)
 benchmark_graph_dataset = GraphDataset(args.benchmark_file_path)
 
 
 dataloader = DataLoader(graph_dataset, batch_size=args.batchsize, shuffle=True, num_workers=8, drop_last=True)
 task_dataloader = DataLoader(task_graph_dataset, batch_size=8, shuffle=False, num_workers=1)
-benchmark_dataloader = DataLoader(benchmark_graph_dataset, batch_size=100, shuffle=False, num_workers=2)
+benchmark_dataloader = DataLoader(benchmark_graph_dataset, batch_size=100, shuffle=False, num_workers=4)
 
-optim = optax.adamw(learning_rate=args.lr, weight_decay=1e-4) # optax.clip_by_global_norm(1.))
+optim = optax.adamw(learning_rate=args.lr, weight_decay=1e-4)
 opt_state = optim.init(eqx.filter(MODEL, eqx.is_inexact_array))
 
 ### needed to reassemble data
@@ -221,6 +225,7 @@ def train_agent(games, network, opt_state, key):
 																	state,
 																	args.policy_weight,
 																	args.L2_weight,
+																	args.entropy_weight,
 																	subkeys)
 	loss, aux = val
 	loss = lax.pmean(loss, axis_name="num_devices")
@@ -261,7 +266,8 @@ for e in pbar:
 			wandb.log({"loss": loss.tolist(),
 						"policy_loss": aux[0].tolist(),
 						"value_loss": aux[1].tolist(),
-						"L2_reg": aux[2].tolist()})
+						"L2_reg": aux[2].tolist(),
+      					"entropy_reg": aux[3].tolist()})
 
 		if counter % args.test_frequency == 0:
 			st = time.time()
@@ -284,16 +290,18 @@ for e in pbar:
 			eqx.tree_serialise_leaves("./checkpoints/" + args.name + "_chckpt.eqx", MODEL)
 
 		if counter % args.benchmarking_frequency == 0:
+			st = time.time()
 			performance_delta = evaluate_benchmark(MODEL, 
 													benchmark_dataloader, 
 													reference_values, 
 													jax.local_devices(), 
 													eval_env_interaction, 
 													key)
+			print("Benchmarking time", time.time() - st)
 			if not args.disable_wandb and args.pid == 0:
 				wandb.log({"performance vs Markowitz": float(performance_delta)})
 
 		counter += 1
 		rewards = [int(r) for r in rews]
-		pbar.set_description(f"loss: {loss}, performance:{performance_delta:.4f}, return: {rewards}")
+		pbar.set_description(f"loss: {loss}, performance: {performance_delta:.4f}, return: {rewards}")
 

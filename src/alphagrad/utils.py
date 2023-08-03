@@ -10,7 +10,6 @@ import jax.tree_util as jtu
 from chex import Array
 import optax
 import equinox as eqx
-import numpy as np
 
 
 def symlog(x: Array) -> Array:
@@ -18,16 +17,17 @@ def symlog(x: Array) -> Array:
 
 
 def symexp(x: Array) -> Array:
-    return jnp.sign(x)*jnp.exp(jnp.abs(x)-1)
+    return jnp.sign(x)*jnp.exp(jnp.abs(x)-1)  
 
 
-@ft.partial(jax.vmap, in_axes=(None, 0, 0, 0, None, None, 0))
+@ft.partial(jax.vmap, in_axes=(None, 0, 0, 0, None, None, None, 0))
 def _A0_loss(network, 
 			policy_target,
 			value_target,
 			state,
 			policy_weight,
 			L2_weight,
+			entropy_weight,
 			key):
 	output = network(state, key=key)
 	policy_logits = output[1:]
@@ -35,12 +35,15 @@ def _A0_loss(network,
 
 	policy_log_probs = jnn.log_softmax(policy_logits, axis=-1)
 	policy_loss = optax.kl_divergence(policy_log_probs, policy_target)
+	entropy_reg = optax.kl_divergence(policy_log_probs, jnp.exp(policy_log_probs))
 	value_loss = optax.l2_loss(value, symlog(value_target))[0] # added symlog for reward scaling
  
 	params = eqx.filter(network, eqx.is_array)
 	squared_sums = jtu.tree_map(lambda x: jnp.sum(jnp.square(x)), params)
 	L2_reg = jtu.tree_reduce(lambda x, y: x+y, squared_sums)
-	return policy_weight*policy_loss + value_loss + L2_weight*L2_reg, jnp.stack((policy_weight*policy_loss, value_loss, L2_weight*L2_reg))
+ 
+	loss = policy_weight*policy_loss + value_loss + L2_weight*L2_reg + entropy_weight*entropy_reg
+	return loss, jnp.stack((policy_weight*policy_loss, value_loss, L2_weight*L2_reg, entropy_reg*entropy_weight))
 
 
 def A0_loss(network, 
@@ -49,6 +52,7 @@ def A0_loss(network,
             state, 
             policy_weight,
             L2_weight,
+            entropy_weight,
             keys):
 	loss, aux =  _A0_loss(network, 
 						policy_target, 
@@ -56,6 +60,7 @@ def A0_loss(network,
 						state,
 						policy_weight,
 						L2_weight,
+						entropy_weight,
 						keys)
 	return loss.mean(), aux.mean(axis=0)
 
@@ -110,7 +115,7 @@ def make_batch(edges, num_devices: int = 1) -> Array:
 
 def update_best_scores(single_best_performance, names, rews, orders):
 	for name, rew, order in zip(names, rews, orders):
-		if rew < single_best_performance[name][0]:
+		if rew > single_best_performance[name][0]:
 			single_best_performance[name] = (rew, order)
 	print(single_best_performance)
 

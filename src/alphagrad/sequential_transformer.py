@@ -85,7 +85,7 @@ class SequentialTransformer(eqx.Module):
 
 
 class SequentialTransformerModel(eqx.Module):
-    embedding: eqx.nn.Conv3d
+    embedding: eqx.nn.Conv2d
     projection: Array
     output_token: Array
     transformer: SequentialTransformer
