@@ -1,0 +1,1 @@
+from .random import make_random_code

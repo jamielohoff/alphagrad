@@ -55,10 +55,9 @@ MANIFEST
 
 # Custom files and folders
 **/wandb/
-**/mnist/
-**/cifar10/
 **/__pycache__/
 **/checkpoints/
+**/data/
 
 *.hdf5
 *.h5

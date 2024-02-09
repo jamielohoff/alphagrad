@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import jax.random as jrand
 import jax.tree_util as jtu
 
-from chex import Array
+from chex import Array, PRNGKey
 import optax
 import equinox as eqx
 
@@ -21,47 +21,73 @@ def symexp(x: Array) -> Array:
 
 
 @ft.partial(jax.vmap, in_axes=(None, 0, 0, 0, None, None, None, 0))
-def _A0_loss(network, 
-			policy_target,
-			value_target,
-			state,
-			policy_weight,
-			L2_weight,
-			entropy_weight,
-			key):
+def A0_loss_fn(network, 
+				policy_target,
+				value_target,
+				state,
+				value_weight,
+				L2_weight,
+				entropy_weight,
+				key: PRNGKey):
+	"""Loss function as defined in AlphaZero paper with additional entropy
+	regularization to promote exploration
+
+
+	Args:
+		network (_type_): _description_
+		policy_target (_type_): _description_
+		value_target (_type_): _description_
+		state (_type_): _description_
+		policy_weight (_type_): _description_
+		L2_weight (_type_): _description_
+		entropy_weight (_type_): _description_
+		key (PRNGKey): _description_
+
+	Returns:
+		_type_: _description_
+	"""
 	output = network(state, key=key)
 	policy_logits = output[1:]
 	value = output[0:1]
 
 	policy_log_probs = jnn.log_softmax(policy_logits, axis=-1)
-	policy_loss = optax.kl_divergence(policy_log_probs, policy_target)
-	entropy_reg = optax.kl_divergence(policy_log_probs, jnp.exp(policy_log_probs))
-	value_loss = optax.l2_loss(value, symlog(value_target))[0] # added symlog for reward scaling
+	policy_loss = -jnp.dot(policy_log_probs, policy_target)
+	entropy_reg = -jnp.sum(policy_log_probs*jnp.exp(policy_log_probs))
  
+	# Added symlog for reward scaling
+	value_loss = optax.l2_loss(value, symlog(value_target))[0]
+ 
+	# Computing the L2 regularization
 	params = eqx.filter(network, eqx.is_array)
 	squared_sums = jtu.tree_map(lambda x: jnp.sum(jnp.square(x)), params)
 	L2_reg = jtu.tree_reduce(lambda x, y: x+y, squared_sums)
  
-	loss = policy_weight*policy_loss + value_loss + L2_weight*L2_reg + entropy_weight*entropy_reg
-	return loss, jnp.stack((policy_weight*policy_loss, value_loss, L2_weight*L2_reg, entropy_reg*entropy_weight))
+	loss = policy_loss + value_weight*value_loss 
+	loss += L2_weight*L2_reg 
+	loss += entropy_weight*entropy_reg
+	aux = jnp.stack((policy_loss, 
+                	value_loss, 
+                 	L2_weight*L2_reg, 
+                  	entropy_reg))
+	return loss, aux
 
 
 def A0_loss(network, 
             policy_target, 
             value_target,
             state, 
-            policy_weight,
+            value_weight,
             L2_weight,
             entropy_weight,
             keys):
-	loss, aux =  _A0_loss(network, 
-						policy_target, 
-						value_target, 
-						state,
-						policy_weight,
-						L2_weight,
-						entropy_weight,
-						keys)
+	loss, aux =  A0_loss_fn(network, 
+							policy_target, 
+							value_target, 
+							state,
+							value_weight,
+							L2_weight,
+							entropy_weight,
+							keys)
 	return loss.mean(), aux.mean(axis=0)
 
 
@@ -73,8 +99,7 @@ def get_masked_logits(logits, state):
 
 @ft.partial(jax.vmap, in_axes=(0,))
 def postprocess_data(data: Array) -> Array:
-	"""
-	TODO add documentation
+	"""Function that computes the returns for certain steps appropriately.
 
 	Args:
 		data (_type_): _description_ 
@@ -111,11 +136,4 @@ def make_batch(edges, num_devices: int = 1) -> Array:
 		edges = edges.reshape(num_devices, per_device_batchsize, *edges_shape)
 
 	return edges
-
-
-def update_best_scores(single_best_performance, names, rews, orders):
-	for name, rew, order in zip(names, rews, orders):
-		if rew > single_best_performance[name][0]:
-			single_best_performance[name] = (rew, order)
-	print(single_best_performance)
 

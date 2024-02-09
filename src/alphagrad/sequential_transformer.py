@@ -56,7 +56,7 @@ class SequentialTransformer(eqx.Module):
         self.global_token = jrand.normal(t_key, (in_dim, 1))
         self.global_token_mask_x = jnp.ones((seq_len, 1))
         self.global_token_mask_y = jnp.ones((1, seq_len+1))
-        self.policy_head = MLP(in_dim, seq_len, policy_ff_dims, key=p_key)
+        self.policy_head = MLP(in_dim, 1, policy_ff_dims, key=p_key)
         self.value_head = MLP(in_dim, 1, value_ff_dims, key=v_key)
         
     def __call__(self, xs: Array, mask: Array = None, key: PRNGKey = None) -> Array:
@@ -78,10 +78,9 @@ class SequentialTransformer(eqx.Module):
         global_token_xs = xs[0]
         value = self.value_head(global_token_xs)
         
-        policy = self.policy_enc(xs, mask=replicated_mask, key=p_key)
-        global_policy_token = policy[0]
-        policy = self.policy_head(global_policy_token)
-        return jnp.concatenate((value, policy))
+        policy_embedding = self.policy_enc(xs[1:], mask=replicated_mask[:, 1:, 1:], key=p_key)
+        policy = jax.vmap(self.policy_head)(policy_embedding)
+        return jnp.concatenate((value, policy.squeeze()))
 
 
 class SequentialTransformerModel(eqx.Module):
