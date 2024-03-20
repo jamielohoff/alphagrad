@@ -14,8 +14,8 @@ from alphagrad.vertexgame import make_graph
 from alphagrad.vertexgame.core import ADD_SPARSITY_MAP, MUL_SPARSITY_MAP, CONTRACTION_MAP
 
 # The size of these buffers are the main bottleneck of the algorithm.
-IN_VAL_BUFFER_SIZE = 10
-OUT_VAL_BUFFER_SIZE = 10
+IN_VAL_BUFFER_SIZE = 25
+OUT_VAL_BUFFER_SIZE = 25
 
 
 def sparse_mul(in_jac: Array, out_jac: Array) -> Tuple[float, Array]:
@@ -189,7 +189,7 @@ def add_edge(edge: Array,
     """
     Function that adds an edge to the computational graph. If the edge already
     exists, the current value is added to the product of the ingoing and outgoing
-    edge. It uses the `free_idxs`buffer to keep track of where in the 
+    edge. It uses the `free_idxs` buffer to keep track of where in the 
     computational graph representation we can add new edges after the edges 
     connected to the vertex in question have been removed by the `get_edges` function.
 
@@ -294,18 +294,19 @@ def vertex_eliminate(vertex: int, graph: GraphsTuple) -> GraphsTuple:
     Returns:
         GraphsTuple: The resulting graph after the vertex elimination.
     """
-    
     # Divide the graph representation into its components
     # edge_conn contains the senders and receivers of the graph, i.e. the connectivity
     # of the vertices with each other
     # edge_vals contains the values of the edges
     edge_conn = jnp.stack([graph.senders, graph.receivers]).T
     edge_vals = graph.edges
-    
+        
     # Get the edges connected to the vertex
     # i, j are the used number of places in the buffers, i.e. the number of ingoing
     # and outgoing edges
     i, j, in_pos, in_vals, out_pos, out_vals, edge_conn, edge_vals = get_edges(vertex, edge_conn, edge_vals)
+    
+    jax.debug.print("vertex: {v}, in edges: {i}, out edges: {j}", v=vertex-5, i=i, j=j)
 
     # Calculate the new edges and where in the graph representation we can add them
     is_zero = jnp.all(edge_vals == 0, axis=-1)
@@ -360,8 +361,7 @@ def cross_country(order: Sequence[int], graph: GraphsTuple) -> GraphsTuple:
     # Looping over all the vertices in the order specified
     graph, out = lax.scan(loop_fn, (graph, 0), order)
     out = jnp.stack(out).T
-    print(out)
-    return graph[0]
+    return graph[0], out
     
     
 def forward(graph: GraphsTuple) -> GraphsTuple:
@@ -390,8 +390,8 @@ def reverse(graph: GraphsTuple) -> GraphsTuple:
         GraphsTuple: The resulting graph after executing reverse-mode AD.
     """
     order = jnp.arange(0, len(graph.nodes))[::-1]
-    graph = cross_country(order, graph)
-    return graph
+    graph, out = cross_country(order, graph)
+    return graph, out
 
 
 def embed(num_nodes: int, num_edge: int, graph: GraphsTuple) -> GraphsTuple:
@@ -427,21 +427,67 @@ def embed(num_nodes: int, num_edge: int, graph: GraphsTuple) -> GraphsTuple:
     return graph
 
 
-# from graphax import jacve
-# fn = jax.jit(jacve(RobotArm_6DOF, order="rev", argnums=(0, 1, 2, 3, 4, 5), count_ops=True))
-# xs = [jnp.zeros((60,))]*6
-# fn(*xs)
+from graphax import jacve
+from graphax.sparse.utils import count_muls_jaxpr
+from graphax.examples import (RobotArm_6DOF, RoeFlux_1d, f, Perceptron, 
+                            Simple, Lighthouse, Hole, Helmholtz)
+
+
+F = RobotArm_6DOF
+xs = [jnp.zeros((1,))]*6
+
+
+# def NeuralNetwork(x, W1, b1, W2, b2, y):
+#     y1 = W1 @ x
+#     z1 = y1 + b1
+#     a1 = jnp.tanh(z1)
+    
+#     y2 = W2 @ a1
+#     z2 = y2 + b2
+#     a2 = jnp.tanh(z2)
+#     d = a2 - y
+#     return .5*jnp.sum(d**2)
+
+# F = NeuralNetwork
+# key = jrand.PRNGKey(42)
+# x = jnp.ones(4)
+# y = jrand.normal(key, (4,))
+
+# w1key, b1key, key = jrand.split(key, 3)
+# W1 = jrand.normal(w1key, (8, 4))
+# b1 = jrand.normal(b1key, (8,))
+
+# w2key, b2key, key = jrand.split(key, 3)
+# W2 = jrand.normal(w2key, (4, 8))
+# b2 = jrand.normal(b2key, (4,))
+
+# xs = [x, W1, b1, W2, b2, y]
+
+# F = f
 
 # a = jnp.ones(4)
 # b = jnp.ones((2, 3))
 # c = jnp.ones((4, 4))
 # d = jnp.ones((3, 3))
 # e = jnp.ones((4, 1))
+# xs = [a, b, c, d, e]
 
-from graphax.examples import RobotArm_6DOF, RoeFlux_1d, f, Perceptron, Simple, Lighthouse, Hole
+# F = Helmholtz
+# xs = [jnp.ones((4,))]
 
-# dense_graph = make_graph(f, a, b, c, d, e)
-dense_graph = make_graph(Lighthouse, 1., 1., 1., 1.)
+# F = RoeFlux_1d
+# xs = [jnp.ones((1,))]*6
+args = range(len(xs))
+dense_graph = make_graph(F, *xs)
+print(dense_graph.shape)
+jaxpr = jax.make_jaxpr(jacve(F, order="rev", argnums=args, count_ops=True))(*xs)
+deriv_jaxpr = jax.make_jaxpr(jacve(F, order="rev", argnums=args, count_ops=True))(*xs)
+
+jacobian, aux = jax.jit(jacve(F, order="rev", argnums=args, count_ops=True, ))(*xs)
+print("num muls:", aux["num_muls"], "num_adds:", aux["num_adds"])
+print(count_muls_jaxpr(deriv_jaxpr) - count_muls_jaxpr(jaxpr))
+
+
 nonzeros = jnp.nonzero(dense_graph[1, 1:])
 
 nodes = jnp.where(dense_graph[1, 0, :] > 0, 1, 0)
@@ -450,42 +496,54 @@ num_input_nodes = dense_graph.shape[1] - dense_graph.shape[2] - 1
 input_nodes = jnp.ones(num_input_nodes)
 nodes = jnp.concatenate([input_nodes, nodes])
 
+
+edges = []
+for i, j in zip(nonzeros[0], nonzeros[1]):
+    edge = dense_graph[:, i+1, j]
+    edges.append(edge)
+edges = jnp.stack(edges)
+
 sparse_graph = GraphsTuple(nodes=nodes,
-                            edges=jnp.ones((len(nonzeros[0]), 5)),
+                            edges=edges,
                             senders=nonzeros[0],
                             receivers=num_input_nodes+nonzeros[1],
                             n_node=len(nodes),
                             n_edge=len(nonzeros[0]),
                             globals=jnp.array([[0.]]))
 
+
 import time
 from alphagrad.vertexgame import reverse as old_reverse
 from alphagrad.vertexgame.transforms import embed as old_embed
 
-start = time.time()
-embedded_graph = embed(150, 500, sparse_graph)
-end = time.time()
-print(end-start)
+# start = time.time()
+# embedded_graph = embed(150, 500, sparse_graph)
+# end = time.time()
+# print("jraph embedding", end-start)
+embedded_graph = sparse_graph
 
 start = time.time()
-out_graph = jax.jit(reverse)(embedded_graph)
+out_graph, out = reverse(embedded_graph)
 end = time.time()
-print(end-start, out_graph.globals)
+print("jraph reverse time jit", end-start, out_graph.globals)
 
 start = time.time()
-out_graph = jax.jit(reverse)(embedded_graph)
+out_graph, out = reverse(embedded_graph)
 end = time.time()
-print(end-start, out_graph.globals)
+print("jraph reverse time", end-start, out_graph.globals)
 
-key = jrand.PRNGKey(123)
-dense_graph = old_embed(key, dense_graph, [20, 150, 20])
+print([(int(i), int(j)) for i, j in zip(out[0], out[1])])
+
+# key = jrand.PRNGKey(123)
+# print("embedding takes time")
+# dense_graph = old_embed(key, dense_graph, [20, 150, 20])
 start = time.time()
-out_graph, nops = jax.jit(old_reverse)(dense_graph)
+out_graph, nops = old_reverse(dense_graph)
 end = time.time()
-print(end-start, nops)
+print("alphagrad time jit", end-start, nops)
 
 start = time.time()
-out_graph, nops = jax.jit(old_reverse)(dense_graph)
+out_graph, nops = old_reverse(dense_graph)
 end = time.time()
-print(end-start, nops)
+print("alphagrad time", end-start, nops)
         

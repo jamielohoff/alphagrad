@@ -3,8 +3,7 @@ import jax
 import equinox as eqx
 
 from alphagrad.utils import make_init_state, make_batch
-from graphax.transforms.markowitz import minimal_markowitz
-from graphax import cross_country
+from alphagrad.vertexgame import minimal_markowitz, cross_country
 
 
 # TODO documentation

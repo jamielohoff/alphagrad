@@ -10,8 +10,8 @@ from chex import Array, PRNGKey
 
 from ...utils import sparsify
 from ..sampler import ComputationalGraphSampler
-from ....interpreter.from_jaxpr import make_graph
-from ....transforms import safe_preeliminations, compress, embed, clean
+from ...interpreter.from_jaxpr import make_graph
+from ...transforms import safe_preeliminations, compress, embed, clean
 
 
 # TODO refactor code such that we do no longer need the global variable

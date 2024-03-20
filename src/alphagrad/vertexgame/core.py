@@ -17,30 +17,62 @@ import jax.numpy as jnp
 
 from chex import Array
 
-# Every entry in the 3-dimensional tensor has the following meaning:
-# (sparsity type, Jacobian shape 1st input component == 1st component, 
-#                 Jacobain shape 2nd input component == 2nd component,
-#                 Jacobian shape 1st output component == 3rd component,
-#                 Jacobian shape 2nd output component == 4th component)
-# Thus the current implementation can only deal with scalars vectors and matrices
-# and related operations. 
-# NOTE: No support for higher-order tensors yet!
 
-# Sparsity types explanation:
-# 0: No edge between vertices
-# 1: Dense Jacobian, i.e. no Kronecker symbols
-# 8: For "copy" operation that keep sparsity
-#
-# Kronecker symbol between components: 
-# 2: (1, 3)
-# 3: (2, 4)
-# 4: (1, 4)
-# 5: (2, 3)
-# 6: (1, 3) and (2, 4)
-# 7: (1, 4) and (2, 3)
+"""
+Documentation of the sparsity types:
+--------------------------------------
+
+Every entry in the 3-dimensional tensor has the following meaning:
+(sparsity type, Jacobian shape 1st input component == 1st component, 
+                Jacobain shape 2nd input component == 2nd component,
+                Jacobian shape 1st output component == 3rd component,
+                Jacobian shape 2nd output component == 4th component)
+Thus the current implementation can only deal with scalars vectors and matrices
+and related operations. 
+It is basically a adjecency matrix of the computational graph, with the 3rd 
+dimension indicating the sparsity type and shape of the Jacobians associated
+with the respective edge.
+
+NOTE: No support for higher-order tensors yet!
+
+Sparsity types explanation:
+0: No edge between vertices
+1: Dense Jacobian, i.e. no Kronecker symbols
+-1: For `copy` operation that keep sparsity
+8: 
+-8: unused
+
+Diagonal matrix sparsity types:
+2: (1, 3)
+3: (2, 4)
+4: (1, 4)
+5: (2, 3)
+6: (1, 3) and (2, 4)
+7: (1, 4) and (2, 3)
+
+Pure Kronecker symbol sparsity types:
+-2: K(1, 3)
+-3: K(2, 4)
+-4: K(1, 4)
+-5: K(2, 3)
+-6: K(1, 3) and K(2, 4)
+-7: K(1, 4) and K(2, 3)
+
+Mix between pure Kronecker and diagonal matrix sparsity meaning:
+8: K(1, 3) and (2, 4)
+9: K(1, 4) and (2, 3)
+-8: (1, 3) and K(2, 4)
+-9: (1, 4) and K(2, 3)
+==> The negative sign on sparsity entry is similar to a conjugation operation
+
+To signify replicating dimensions, we just set the value of the respective
+thing to negative it's current value.
+Example: (2, 3, 4, 3, -5) has a replicating dimension in 2nd output dimension
+"""
+
 
 # Row idx is incoming edge, col idx is outgoing edge
-# For meaning of the different numbers, "checkout fmas_sparsity_map()" function
+#  Contraction map of the indices
 CONTRACTION_MAP =  jnp.array([[[0, 0, 0, 0, 0, 0, 0, 0, 0],
                                [0, 1, 0, 1, 1, 0, 0, 0, 0],
                                [0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -81,6 +113,7 @@ CONTRACTION_MAP =  jnp.array([[[0, 0, 0, 0, 0, 0, 0, 0, 0],
                                [0, 1, 1, 0, 0, 1, 0, 0, 0],
                                [0, 0, 0, 0, 0, 0, 0, 0, 0]]])    
 
+
 # Row idx is incoming edge, col idx is outgoing edge
 # Gives the resulting sparsity type if two hyperdimensional Jacobians
 # are multiplied with each other
@@ -93,6 +126,26 @@ MUL_SPARSITY_MAP = jnp.array([[0, 0, 0, 0, 0, 0, 0, 0, 0],
                               [0, 1, 2, 3, 4, 5, 6, 7, 6],
                               [0, 1, 5, 4, 3, 2, 7, 6, 7],
                               [0, 1, 2, 3, 4, 5, 6, 7, 8]])
+
+
+MUL_SPARSITY_MAP_LEFT =  jnp.array([[0, 0, 0, 0, 0, 0, 0, 0, 0],
+                                    [0, 1, 1, 1, 1, 1, 1, 1, 1],
+                                    [0, 1, 2, 1, 4, 1, 2, 4, 2],
+                                    [0, 1, 1, 3, 1, 5, 3, 5, 3]])
+
+MUL_SPARSITY_MAP_RIGHT = jnp.array([[0, 0, 0, 0, 0, 0, 0, 0, 0],
+                                    [0, 1, 1, 1, 1, 1, 1, 1, 1],
+                                    [0, 1, 2, 1, 4, 1, 2, 4, 2],
+                                    [0, 1, 1, 3, 1, 5, 3, 5, 3]])
+
+MUL_SPARSITY_MAP_BOTH = jnp.array([[9, 10, 6,  7],
+                                   [7, 6, 10, 12],
+                                   [6, 7, 11, 12],
+                                   [12, 11, 7, 6]])
+
+
+# NOTE also impacts the factors of in_edges
+# TODO implement this!
 
 # Row idx is incoming edge, col idx is outgoing edge
 # Gives the resulting sparsity type if two hyperdimensional Jacobians
@@ -108,6 +161,32 @@ ADD_SPARSITY_MAP = jnp.array([[0, 1, 2, 3, 4, 5, 6, 7, 8],
                               [8, 1, 2, 3, 4, 5, 6, 7, 8]])
 
 
+# Add sparsity replication algorithm:
+# We devised a simple solution where we just multiply the respective size of the
+# dimension of the Jacobian by negative on if the dimension is replicating
+# TODO implement this!
+
+
+# Impact of pure Kronecker symbols on the resulting add sparsity type:
+# nothing changes compared to the ADD_SPARSITY_MAP except for the cases where
+# both sparsity types indicate a pure Kronecker symbol, then the resulting
+# sparsity type is also a pure Kronecker symbol
+# maybe use modulo operator to implement this?
+# TODO implement this!
+
+
+# Contraction map has to be implemented by hand?
+# NOTE need separate Contraction map for pure Kronecker case since there it also
+# impacts the factors of in_edges!
+
+
+# We should be able to reuse the entire MUL_SPARSITY_MAP for the pure Kronecker
+# case, since the resulting sparsity type is the same as for the diagonal case
+# It just needs some additional if-else conditionals to capture the corner cases
+# when both Jacobians have a pure Kronecker symbol as sparsity type
+# TODO implement this!
+
+
 Edge = Tuple[int, int]
 
 
@@ -118,15 +197,15 @@ def get_shape(edges: Array):
 
 
 def get_output_mask(edges: Array):
-    return edges.at[2, 0, :].get()
+    return edges[2, 0, :]
 
 
 def get_vertex_mask(edges: Array):
-    return edges.at[1, 0, :].get()
+    return edges[1, 0, :]
 
 
 def get_elimination_order(edges: Array):
-    return edges.at[3, 0, :].get()
+    return edges[3, 0, :]
 
 
 def make_empty_edges(info: Array) -> Array:
@@ -144,7 +223,8 @@ def sparsity_where(in_edge, out_edge):
     # different sparsity type
     i = in_edge.astype(jnp.int32)
     j = out_edge.astype(jnp.int32)
-    return ADD_SPARSITY_MAP[i, j]
+    new_sparsity_type = ADD_SPARSITY_MAP[i, j]
+    return lax.select(jnp.logical_and(i < 0, j < 0), -new_sparsity_type, new_sparsity_type)
 
 
 @partial(jax.vmap, in_axes=(1, None))
@@ -152,48 +232,64 @@ def sparsity_fmas_map(in_edge, out_edge):
     """
     TODO add documentation here!
     """
+    # Get the sparsity type of the ingoing and outgoing edge
     i = in_edge[0].astype(jnp.int32)
     j = out_edge[0].astype(jnp.int32)
+
     new_sparsity_type = MUL_SPARSITY_MAP[i, j]
+    # Take care of the corner cases where we have pure Kronecker symbols
+    new_sparsity_type = lax.select(jnp.logical_and(i < 0, j < 0), 
+                                    -new_sparsity_type, 
+                                    new_sparsity_type)
+    
     contraction_map = CONTRACTION_MAP[:, i, j]
     
+    # jax.debug.print("map {map}", map=contraction_map)
     masked_factors = lax.cond(jnp.sum(contraction_map) > 0,
                                 lambda a: jnp.where(contraction_map > 0, a, 1),
                                 lambda a: jnp.zeros(4, dtype=jnp.int32),
                                 out_edge[1:])
-
+    # jax.debug.print("{in_edge} {out_edge}", in_edge=in_edge[1:3], out_edge=masked_factors)
     fmas = jnp.prod(in_edge[1:3])*jnp.prod(masked_factors)
     return new_sparsity_type, fmas
 
 
-def get_fmas_jacprod(_jac_edges, fmas, col, _col, nonzero, vertex, num_i):
+# TODO exchange in_edges and out_edges
+def get_fmas_of_jacprod(all_edges, fmas, in_edges, out_edges, nonzero, vertex, num_i):
     # Define aliases
-    col_ins = col.at[1:3, :].get()
-    col_outs = col.at[3:, :].get()
+    in_edges_primals = in_edges[3:, :]
+    in_edges_outs = in_edges[1:3, :]
     
-    _col_ins = _col.at[1:3, :].get()
-    _col_outs = _col.at[3:, :].get()
+    out_edges_primals = out_edges[3:, :]
+    out_edges_outs = out_edges[1:3, :]
         
     # Calculate fmas
-    new_sparsity_col, _fmas = sparsity_fmas_map(col, _col[:, vertex+num_i-1])
-    new_sparsity_col = sparsity_where(_col[0, :], new_sparsity_col)
-    new_sparsity_col = jnp.broadcast_to(new_sparsity_col, (1, *new_sparsity_col.shape))
-    fmas = jnp.sum(_fmas)
-    # In shape column
-    new_col_ins = jnp.where(col_ins[1] > 0, col_ins, _col_ins)
+    # Select only the edges that are connected to the vertex through code below
+    new_sparsity, _fmas = sparsity_fmas_map(in_edges, out_edges[:, vertex+num_i-1])
+    # jax.debug.print("{ins}", ins=in_edges)
+    # jax.debug.print("{out}", out=out_edges[:, vertex+num_i-1])
+    # jax.debug.print("{fmas}", fmas=_fmas)
     
-    # Out shape column
-    new_col_outs = jnp.broadcast_to(_col_outs[:, vertex+num_i-1, jnp.newaxis], _col_outs.shape)
-    new_col_outs = jnp.where(col_outs[1] > 0, new_col_outs, _col_outs)
-    new_col = jnp.concatenate((new_sparsity_col, new_col_ins, new_col_outs), axis=0)
+    # Calculate resulting sparsity type
+    new_sparsity = sparsity_where(out_edges[0, :], new_sparsity)
+    new_sparsity = jnp.broadcast_to(new_sparsity, (1, *new_sparsity.shape))
+    fmas = jnp.sum(_fmas)
+    # In shape new edges
+    new_edges_ins = jnp.where(in_edges_primals[1] > 0, in_edges_primals, out_edges_primals)
+    
+    # Out shape new edges
+    new_edges_outs = jnp.broadcast_to(out_edges_outs[:, vertex+num_i-1, jnp.newaxis], out_edges_outs.shape)
+    new_edges_outs = jnp.where(in_edges_outs[1] > 0, new_edges_outs, out_edges_outs)
+    new_edges = jnp.concatenate((new_sparsity, new_edges_outs, new_edges_ins), axis=0)
+    # jax.debug.print("new col {col}", col=new_edges[0, :])
         
     # Set the Jacobian adjacency matrix
-    _jac_edges = lax.dynamic_update_index_in_dim(_jac_edges, new_col, nonzero, -1)
+    all_edges = lax.dynamic_update_index_in_dim(all_edges, new_edges, nonzero, -1)
             
-    return _jac_edges, fmas
+    return all_edges, fmas
 
 
-def vertex_eliminate(vertex: int, edges: Array) -> Tuple[Array, float]:
+def vertex_eliminate(vertex: int, graph: Array) -> Tuple[Array, float]:
     """
     Fully JIT-compilable function that implements the vertex-elimination procedure. 
     Vertex elimination means that we front-eliminate all incoming edges and 
@@ -209,47 +305,36 @@ def vertex_eliminate(vertex: int, edges: Array) -> Tuple[Array, float]:
         A tuple that contains the new edge representation of the computational
         graph and the number of fmas (fused multiplication-addition ops).
     """
-    num_i, num_v = get_shape(edges)
-    jac_edges = edges.at[:, 1:, :].get()
-    col = jac_edges.at[:, :, vertex-1].get()
-        
+    # jax.debug.print("{graph}", graph=graph[0, :, :])
+    num_i, num_v = get_shape(graph)
+    edges = graph[:, 1:, :]
+    in_edges = edges[:, :, vertex-1]
     def update_edges_fn(carry, nonzero):
-        _jac_edges, fmas = carry
+        edges, fmas = carry
         # Get the index of the operation and the 
-        _col = _jac_edges.at[:, :, nonzero].get()
+        out_edges = edges[:, :, nonzero]
         # Calculate the fma operations and the new shapes of the Jacobians for 
         # the respective and update the vertex
-        _jac_edges, _fmas = lax.cond(nonzero > -1, 
-                                    lambda _e, f, c, _c, nz, v: get_fmas_jacprod(_e, f, c, _c, nz, v, num_i), 
-                                    lambda _e, f, c, _c, nz, v: (_e, 0), 
-                                    _jac_edges, fmas, col, _col, nonzero, vertex)
+        edges, _fmas = lax.cond(nonzero > -1, 
+                                lambda e, f, ie, oe, nz, v: get_fmas_of_jacprod(e, f, ie, oe, nz, v, num_i), 
+                                lambda e, f, ie, oe, nz, v: (e, 0), 
+                                edges, fmas, in_edges, out_edges, nonzero, vertex)
         fmas += _fmas        
-        carry = (_jac_edges, fmas)
+        carry = (edges, fmas)
         return carry, None
     
-    nonzeros = jnp.nonzero(jac_edges.at[0, num_i+vertex-1, :].get(),
-                           size=num_v,
-                           fill_value=-1)[0].T
+    nonzeros = jnp.nonzero(edges[0, num_i+vertex-1, :], size=num_v, fill_value=-1)[0].T
         
-    output, _ = lax.scan(update_edges_fn, (jac_edges, 0), nonzeros)
-    jac_edges, fmas = output
-    jac_edges = jac_edges.at[:, num_i+vertex-1, :].set(0)
-    jac_edges = jac_edges.at[:, :, vertex-1].set(0)
+    output, _ = lax.scan(update_edges_fn, (edges, 0), nonzeros)
+    new_edges, fmas = output
+    # Delete old edges
+    new_edges = new_edges.at[:, num_i+vertex-1, :].set(0)
+    new_edges = new_edges.at[:, :, vertex-1].set(0)
 
-    edges = edges.at[1, 0, vertex-1].set(1)
-    edges = edges.at[:, 1:, :].set(jac_edges)
-    return edges, fmas
-
-
-def scan(f, init, xs, length=None):
-    if xs is None:
-        xs = [None] * length
-    carry = init
-    ys = []
-    for x in xs:
-        carry, y = f(carry, x)
-        ys.append(y)
-    return carry, jnp.stack(ys)
+    graph = graph.at[1, 0, vertex-1].set(1)
+    graph = graph.at[:, 1:, :].set(new_edges)
+    # jax.debug.print("{vertex} {fmas}", vertex=vertex, fmas=fmas)
+    return graph, fmas
 
 
 def cross_country(order: Sequence[int], edges: Array) -> Array:
@@ -265,10 +350,10 @@ def cross_country(order: Sequence[int], edges: Array) -> Array:
         A tuple that contains the new edge representation of the computational
         graph and the number of fmas (fused multiplication-addition ops).
     """
-
     def cc_fn(carry, vertex):
         _edges, fmas = carry
         not_masked = jnp.logical_not(_edges.at[1, 0, vertex-1].get() > 0)
+                
         _edges, _fmas = lax.cond(not_masked,
                                 lambda e: vertex_eliminate(vertex, e),
                                 lambda e: (e, 0),
@@ -319,8 +404,6 @@ def reverse(edges: Array):
     """
     num_i, num_vo = get_shape(edges)
     order = jnp.arange(1, num_vo+1)[::-1]
-    #ignored = list(jnp.nonzero(edges.at[1, 0, :].get() > 0)[0]+1)
-    output, fmas = cross_country(order, edges)
-    #print(f"edges order: {[(int(o), int(fma)) for o, fma in zip(order, fmas) if o not in ignored]}")
+    output, _ = cross_country(order, edges)
     return output
 

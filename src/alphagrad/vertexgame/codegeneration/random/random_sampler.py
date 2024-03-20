@@ -10,8 +10,8 @@ from chex import Array, PRNGKey
 from .random_codegenerator import make_random_code, make_random_derivative_code
 from ..sampler import ComputationalGraphSampler
 from ...utils import sparsify
-from ....transforms import safe_preeliminations, compress, embed, clean
-from ....interpreter.from_jaxpr import make_graph
+from ...transforms import safe_preeliminations, compress, embed, clean
+from ...interpreter.from_jaxpr import make_graph
 
 
 class RandomSampler(ComputationalGraphSampler):

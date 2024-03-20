@@ -33,6 +33,7 @@ def count_eqns(eqns: Sequence[JaxprEqn]) -> Sequence[JaxprEqn]:
     return len(filtered_eqns)
 
 
+# TODO implement a working version of this
 def unroll_pjit(eqn: JaxprEqn) -> Sequence[JaxprEqn]:
     """
     Function that unrolls "pjit" primitives which define subexpressions that

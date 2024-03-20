@@ -45,24 +45,21 @@ class EncoderLayer(eqx.Module):
                                                     in_dim, 
                                                     key=keys[0],
                                                     **kwargs)
-        attn_norm = eqx.nn.LayerNorm(in_dim)
-        self.attn_norm = jax.vmap(attn_norm, in_axes=(0,))
+        self.attn_norm = eqx.nn.LayerNorm(in_dim)
         self.attn_dropout = eqx.nn.Dropout(p=dropout)
         
         # Feed-forward block
-        ff_norm = eqx.nn.LayerNorm(in_dim)
-        self.ff_norm = jax.vmap(ff_norm, in_axes=(0,))
-        ff_layer1 = eqx.nn.Linear(in_dim, 
+        self.ff_norm = eqx.nn.LayerNorm(in_dim)
+        self.ff_layer1 = eqx.nn.Linear(in_dim, 
                                     ff_dim, 
                                     use_bias=use_bias, 
                                     key=keys[1])
-        self.ff_layer1 = jax.vmap(ff_layer1, in_axes=(0,))
+
         self.ff_activation_fn = eqx.nn.Lambda(ff_activation_fn)
-        ff_layer2 = eqx.nn.Linear(ff_dim, 
+        self.ff_layer2 = eqx.nn.Linear(ff_dim, 
                                     in_dim, 
                                     use_bias=use_bias, 
                                     key=keys[2])
-        self.ff_layer2 = jax.vmap(ff_layer2, in_axes=(0,))
 
         self.ff_dropout = eqx.nn.Dropout(p=dropout)
         self.output_activation_fn = eqx.nn.Lambda(output_activation_fn)
@@ -73,16 +70,16 @@ class EncoderLayer(eqx.Module):
                 key: chex.PRNGKey) -> chex.Array:
         keys = jrand.split(key, 3)
         
-        out = self.attn_norm(xs)
+        out = jax.vmap(self.attn_norm)(xs)
         out = self.attn_layer(out, out, out, mask=mask, key=keys[0])
-        out = xs + self.attn_dropout(out, key=keys[1])
+        out = xs + out # self.attn_dropout(out, key=keys[1])
 
-        ff_out = self.ff_norm(out)
-        ff_out = self.ff_layer1(ff_out)
+        ff_out = jax.vmap(self.ff_norm)(out)
+        ff_out = jax.vmap(self.ff_layer1)(ff_out)
         ff_out = self.ff_activation_fn(ff_out)
-        ff_out = self.ff_layer2(ff_out)
+        ff_out = jax.vmap(self.ff_layer2)(ff_out)
         
-        ff_out = out + self.ff_dropout(ff_out, key=keys[2])
+        ff_out = out + ff_out # self.ff_dropout(ff_out, key=keys[2])
         return self.output_activation_fn(ff_out)
 
 

@@ -154,7 +154,7 @@ def add_bi_vertex(edges, eqn, variables):
         
         edges = edges.at[0, i, j].set(sparsity_type)
         
-        structure = jnp.concatenate([_invar_shape, _outvar_shape]) 
+        structure = jnp.concatenate([_outvar_shape, _invar_shape]) 
         edges = edges.at[1:, i, j].set(structure)
     return edges
 
@@ -234,25 +234,25 @@ def add_dot_general_vertex(edges, eqn, variables):
         i0 = variables[str(eqn.invars[0])]
         
         edges = edges.at[0, i0, j].set(sparsity_type_0)
-        structure = jnp.concatenate([_invar_shape_0, _outvar_shape]) 
+        structure = jnp.concatenate([_outvar_shape, _invar_shape_0]) 
         edges = edges.at[1:, i0, j].set(structure)
     # Only second variable is a Var
     elif not isinstance(eqn.invars[0], Var) and isinstance(eqn.invars[1], Var):
         i1 = variables[str(eqn.invars[1])]
         
         edges = edges.at[0, i1, j].set(sparsity_type_1)
-        structure = jnp.concatenate([_invar_shape_1, _outvar_shape]) 
+        structure = jnp.concatenate([_outvar_shape, _invar_shape_1]) 
         edges = edges.at[1:, i1, j].set(structure)
     # Both variables are Var
     else:
         i0 = variables[str(eqn.invars[0])]
         i1 = variables[str(eqn.invars[1])]
         edges = edges.at[0, i0, j].set(sparsity_type_0)
-        structure_0 = jnp.concatenate([_invar_shape_0, _outvar_shape]) 
+        structure_0 = jnp.concatenate([_outvar_shape, _invar_shape_0]) 
         edges = edges.at[1:, i0, j].set(structure_0)
         
         edges = edges.at[0, i1, j].set(sparsity_type_1)
-        structure_1 = jnp.concatenate([_invar_shape_1, _outvar_shape]) 
+        structure_1 = jnp.concatenate([_outvar_shape, _invar_shape_1]) 
         edges = edges.at[1:, i1, j].set(structure_1)
     return edges
     
@@ -288,7 +288,7 @@ def add_accumulation_vertex(edges, eqn, variables):
     j = variables[str(eqn.outvars[0])] - num_i - 1
 
     edges = edges.at[0, i, j].set(sparsity_type)
-    structure = jnp.concatenate([_invar_shape, _outvar_shape]) 
+    structure = jnp.concatenate([_outvar_shape, _invar_shape]) 
     edges = edges.at[1:, i, j].set(structure)
     return edges
 
@@ -327,7 +327,7 @@ def add_transpose_vertex(edges, eqn, variables):
     j = variables[str(eqn.outvars[0])] - num_i - 1
 
     edges = edges.at[0, i, j].set(sparsity_type)
-    structure = jnp.concatenate([_invar_shape, _outvar_shape]) 
+    structure = jnp.concatenate([_outvar_shape, _invar_shape]) 
     edges = edges.at[1:, i, j].set(structure)
     return edges
 
@@ -376,7 +376,7 @@ def add_copy_gradient_vertex(edges, eqn, variables):
     j = variables[str(eqn.outvars[0])] - num_i - 1
 
     edges = edges.at[0, i, j].set(sparsity_type)
-    structure = jnp.concatenate([_invar_shape, _outvar_shape]) 
+    structure = jnp.concatenate([_outvar_shape, _invar_shape]) 
     edges = edges.at[1:, i, j].set(structure)
     return edges
 
@@ -416,7 +416,7 @@ def add_concatenate_vertex(edges, eqn, variables):
         j = variables[str(eqn.outvars[0])] - num_i - 1
 
         edges = edges.at[0, i, j].set(sparsity_type)
-        structure = jnp.concatenate([_invar_shape, _outvar_shape])
+        structure = jnp.concatenate([_outvar_shape, _invar_shape])
         edges = edges.at[1:, i, j].set(structure)
                         
     return edges

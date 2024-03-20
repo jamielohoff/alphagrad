@@ -47,7 +47,7 @@ def step(edges: Array, action: int) -> EnvOut:
     reward = -nops
     num_eliminated_vertices = get_vertex_mask(new_edges).sum()
     num_intermediates = get_shape(new_edges)[1]
-    terminated = lax.cond(num_eliminated_vertices == num_intermediates, lambda: True, lambda: False)
+    terminated = lax.select(num_eliminated_vertices == num_intermediates, True, False)
 
     return new_edges, reward, terminated
 

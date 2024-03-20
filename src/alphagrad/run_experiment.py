@@ -19,7 +19,7 @@ paths = Paths(file_path="./data/_samples",
             weights_path=None)
 
 key = jrand.PRNGKey(42)
-INFO = jnp.array([20, 105, 20])
+INFO = jnp.array([6, 101, 6])
 model = SequentialTransformerModel(INFO, 
 									64, 
 									2, 

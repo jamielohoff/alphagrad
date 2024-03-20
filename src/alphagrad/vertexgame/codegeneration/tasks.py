@@ -14,8 +14,8 @@ from graphax.examples import (f, RoeFlux_1d,
 
 
 from ..utils import create, write, sparsify
-from ...interpreter import make_graph
-from ...transforms import safe_preeliminations, compress, embed
+from ..interpreter import make_graph
+from ..transforms import safe_preeliminations, compress, embed
 
 def make_task_dataset(key: PRNGKey, fname: str, info: Sequence[int] =[20, 105, 20]) -> None:
     """

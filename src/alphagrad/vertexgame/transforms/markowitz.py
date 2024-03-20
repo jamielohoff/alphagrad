@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Sequence
 
 import jax
@@ -30,16 +31,14 @@ def safe_preeliminations(edges: Array, return_order: bool = False):
         return edges, [int(p) for p in preelim_order if p > 0]
     return edges
 
-
-def minimal_markowitz(edges: Array):
-    num_i, num_vo = get_shape(edges)
-    
+@partial(jax.jit, static_argnums=1)
+def minimal_markowitz(edges: Array, num_v: int) -> Sequence[int]:    
     def loop_fn(_edges, _):
         degree, mMd_vertex = get_minimal_markowitz(_edges)
         _edges, _ = vertex_eliminate(mMd_vertex, _edges)
         return _edges, mMd_vertex
-    
-    it = jnp.arange(1, num_vo+1)
+
+    it = jnp.arange(1, num_v+1)
     _, idxs = lax.scan(loop_fn, edges, it)
 
     # TODO make this jittable, 
