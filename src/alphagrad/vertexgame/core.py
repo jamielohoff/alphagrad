@@ -27,6 +27,8 @@ Every entry in the 3-dimensional tensor has the following meaning:
                 Jacobain shape 2nd input component == 2nd component,
                 Jacobian shape 1st output component == 3rd component,
                 Jacobian shape 2nd output component == 4th component)
+Sorting:
+(sparsity type, out_dim1, out_dim2, primal_dim1, primal_dim2)
 Thus the current implementation can only deal with scalars vectors and matrices
 and related operations. 
 It is basically a adjecency matrix of the computational graph, with the 3rd 
@@ -36,34 +38,36 @@ with the respective edge.
 NOTE: No support for higher-order tensors yet!
 
 Sparsity types explanation:
-0: No edge between vertices
-1: Dense Jacobian, i.e. no Kronecker symbols
--1: For `copy` operation that keep sparsity
-8: 
--8: unused
-
-Diagonal matrix sparsity types:
-2: (1, 3)
-3: (2, 4)
-4: (1, 4)
-5: (2, 3)
-6: (1, 3) and (2, 4)
+--- Mixed types ---
+9: K(1, 4) and (2, 3)
+8: K(1, 3) and (2, 4)
+--- Diagonal parts ---
 7: (1, 4) and (2, 3)
-
-Pure Kronecker symbol sparsity types:
+6: (1, 3) and (2, 4)
+5: (2, 3)
+4: (1, 4)
+3: (2, 4)
+2: (1, 3)
+--- Base types ---
+1: Dense Jacobian, i.e. no Kronecker symbols or diagonal matrices
+0: No edge between vertices
+-1: `copy` operation that keep sparsity, i.e. no Kronecker symbolsor diagonal matrices
+--- Pure Kronecker symbols ---
 -2: K(1, 3)
 -3: K(2, 4)
 -4: K(1, 4)
 -5: K(2, 3)
 -6: K(1, 3) and K(2, 4)
 -7: K(1, 4) and K(2, 3)
-
-Mix between pure Kronecker and diagonal matrix sparsity meaning:
-8: K(1, 3) and (2, 4)
-9: K(1, 4) and (2, 3)
+--- "Conjugates" of 8,9 ---
 -8: (1, 3) and K(2, 4)
 -9: (1, 4) and K(2, 3)
+
+(1, 3) means diagonal between 1st and 3rd index
+K(1, 3) means Kronecker symbol between 1st and 3rd index
+
 ==> The negative sign on sparsity entry is similar to a conjugation operation
+
 
 To signify replicating dimensions, we just set the value of the respective
 thing to negative it's current value.
@@ -73,118 +77,179 @@ Example: (2, 3, 4, 3, -5) has a replicating dimension in 2nd output dimension
 
 # Row idx is incoming edge, col idx is outgoing edge
 #  Contraction map of the indices
-CONTRACTION_MAP =  jnp.array([[[0, 0, 0, 0, 0, 0, 0, 0, 0],
-                               [0, 1, 0, 1, 1, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0, 0, 0],
-                               [0, 1, 0, 1, 1, 0, 0, 0, 0],
-                               [0, 1, 0, 1, 1, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0, 0, 0]],
+# 1 means active, 0 means masked away
+#                     out_edge -9 -8 -7 -6 -5 -4 -3 -2 -1  0  1  2  3  4  5  6  7  8  9   in_edge
+CONTRACTION_MAP =  jnp.array([[[1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0],  # -9
+                               [1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0],  # -8
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -7
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -6
+                               [1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0],  # -5
+                               [1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1],  # -4
+                               [1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0],  # -3
+                               [1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1],  # -2
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -1
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 0
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 1
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 2
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 3
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 4
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 5
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 6
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 7
+                               [1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1],  # 8
+                               [1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1]], # 9
                               
-                              [[0, 0, 0, 0, 0, 0, 0, 0, 0],
-                               [0, 1, 1, 0, 0, 1, 0, 0, 0],
-                               [0, 1, 1, 0, 0, 1, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0, 0, 0],
-                               [0, 1, 1, 0, 0, 1, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0, 0, 0]],
+#                     out_edge -9 -8 -7 -6 -5 -4 -3 -2 -1  0  1  2  3  4  5  6  7  8  9   in_edge
+                              [[1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # -9
+                               [1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # -8
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -7
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -6
+                               [1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # -5
+                               [0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # -4
+                               [1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # -3
+                               [0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # -2
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -1
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 0
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 1
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 2
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 3
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 4
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 5
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 6
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 7
+                               [0, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 8
+                               [0, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]], # 9
                               
-                              [[0, 0, 0, 0, 0, 0, 0, 0, 0],
-                               [0, 1, 1, 1, 1, 1, 1, 1, 0],
-                               [0, 1, 0, 1, 1, 0, 0, 0, 0],
-                               [0, 1, 1, 1, 1, 1, 1, 1, 0],
-                               [0, 1, 1, 1, 1, 1, 1, 1, 0],
-                               [0, 1, 0, 1, 1, 0, 0, 0, 0],
-                               [0, 1, 0, 1, 1, 0, 0, 0, 0],
-                               [0, 1, 0, 1, 1, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0, 0, 0]],
+#                     out_edge -9 -8 -7 -6 -5 -4 -3 -2 -1  0  1  2  3  4  5  6  7  8  9   in_edge
+                              [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -9
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -8
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -7
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -6
+                               [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # -5
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -4
+                               [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # -3
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -2
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -1
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 0
+                               [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # 1
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 2
+                               [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # 3
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 4
+                               [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # 5
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 6
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 7
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 8
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]], # 9
                               
-                              [[0, 0, 0, 0, 0, 0, 0, 0, 0],
-                               [0, 1, 1, 1, 1, 1, 1, 1, 0],
-                               [0, 1, 1, 1, 1, 1, 1, 1, 0],
-                               [0, 1, 1, 0, 0, 1, 0, 0, 0],
-                               [0, 1, 1, 0, 0, 1, 0, 0, 0],
-                               [0, 1, 1, 1, 1, 1, 1, 1, 0],
-                               [0, 1, 1, 0, 0, 1, 0, 0, 0],
-                               [0, 1, 1, 0, 0, 1, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0, 0, 0]]])    
+#                     out_edge -9 -8 -7 -6 -5 -4 -3 -2 -1  0  1  2  3  4  5  6  7  8  9   in_edge
+                              [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -9
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -8
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -7
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -6
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -5
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],  # -4
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -3
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],  # -2
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -1
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 0
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],  # 1
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],  # 2
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 3
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],  # 4
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 5
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 6
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 7
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 8
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]], # 9
+                              
+#                     out_edge -9 -8 -7 -6 -5 -4 -3 -2 -1  0  1  2  3  4  5  6  7  8  9   in_edge
+                              [[0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],  # -9
+                               [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # -8
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -7
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -6
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],  # -5
+                               [0, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0],  # -4
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # -3
+                               [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # -2
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -1
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 0
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 1
+                               [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # 2
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 3
+                               [0, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0],  # 4
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],  # 5
+                               [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # 6
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],  # 7
+                               [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # 8
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0]], # 9
+                              
+#                    out_edge  -9 -8 -7 -6 -5 -4 -3 -2 -1  0  1  2  3  4  5  6  7  8  9   in_edge
+                              [[0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # -9
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],  # -8
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -7
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -6
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # -5
+                               [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # -4
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0],  # -3
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # -2
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # -1
+                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # 0
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 1
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 2
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0],  # 3
+                               [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # 4
+                               [1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],  # 5
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],  # 6
+                               [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0],  # 7
+                               [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],  # 8
+                               [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0]]]) # 9   
 
 
-# Row idx is incoming edge, col idx is outgoing edge
-# Gives the resulting sparsity type if two hyperdimensional Jacobians
-# are multiplied with each other
-MUL_SPARSITY_MAP = jnp.array([[0, 0, 0, 0, 0, 0, 0, 0, 0],
-                              [0, 1, 1, 1, 1, 1, 1, 1, 1],
-                              [0, 1, 2, 1, 4, 1, 2, 4, 2],
-                              [0, 1, 1, 3, 1, 5, 3, 5, 3],
-                              [0, 1, 1, 4, 1, 2, 4, 2, 4],
-                              [0, 1, 5, 1, 3, 1, 5, 3, 5],
-                              [0, 1, 2, 3, 4, 5, 6, 7, 6],
-                              [0, 1, 5, 4, 3, 2, 7, 6, 7],
-                              [0, 1, 2, 3, 4, 5, 6, 7, 8]])
+#                     out_edge -9  -8  -7  -6  -5  -4  -3  -2  -1   0   1   2   3   4   5   6   7   8   9   in_edge
+MUL_SPARSITY_MAP = jnp.array([[ 6,  7,  8, -9,  3, -2, -5,  4, -9,  0,  1,  5,  4,  3,  2,  7,  6, -9,  6],  # -9
+                              [-9, -8,  9, -8,  5, -4, -3,  2, -8,  0,  1,  2,  3,  4,  5,  6,  7,  6,  7],  # -8
+                              [-8, -9, -6, -7, -3, -2, -5, -4, -7,  0,  1,  4,  5,  2,  3,  7,  6,  9,  8],  # -7
+                              [-9, -8, -7, -6, -5, -4, -3, -2, -6,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9],  # -6
+                              [ 2, -5, -2, -5,  1, -2, -5,  1, -5,  0,  1,  1,  5,  2,  1,  5,  2,  5, -2],  # -5
+                              [-3,  4, -3, -4, -3,  1,  1, -4, -4,  0,  1,  4,  1,  1,  3,  4,  3, -4,  3],  # -4
+                              [ 4, -3, -4, -3,  1,  1, -3,  1, -3,  0,  1,  1,  3,  3,  1,  3,  4,  3, -4],  # -3
+                              [-5,  2, -5, -2, -5, -4,  1, -2, -2,  0,  1,  2,  1,  1,  5,  2,  5, -2,  5],  # -2
+                              [-9, -8, -7, -6, -5, -4, -3, -2, -1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9],  # -1
+                              [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],  #  0
+                              [ 1,  1,  1,  1,  1,  1,  1,  1,  1,  0,  1,  1,  1,  1,  1,  1,  1,  1,  1],  #  1
+                              [ 5,  2,  5,  2,  5,  4,  1,  2,  2,  0,  1,  2,  1,  1,  5,  2,  5,  2,  5],  #  2
+                              [ 4,  3,  4,  3,  1,  1,  3,  1,  3,  0,  1,  1,  3,  4,  1,  3,  4,  3,  4],  #  3
+                              [ 3,  4,  3,  4,  3,  1,  1,  4,  4,  0,  1,  4,  1,  1,  3,  4,  3,  4,  3],  #  4
+                              [ 2,  5,  2,  5,  1,  2,  5,  1,  5,  0,  1,  1,  5,  2,  1,  5,  2,  5,  2],  #  5
+                              [ 7,  6,  7,  6,  5,  4,  3,  2,  6,  0,  1,  2,  3,  4,  5,  6,  7,  6,  7],  #  6
+                              [ 6,  7,  6,  7,  3,  2,  5,  4,  7,  0,  1,  4,  5,  2,  3,  7,  6,  7,  6],  #  7
+                              [ 7,  6, -9,  8, -5, -4,  3, -2,  8,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9],  #  8
+                              [-9,  9, -8,  9, -3,  2,  5, -4,  9,  0,  1,  5,  4,  3,  2,  7,  6,  7,  6]]) #  9
 
-
-MUL_SPARSITY_MAP_LEFT =  jnp.array([[0, 0, 0, 0, 0, 0, 0, 0, 0],
-                                    [0, 1, 1, 1, 1, 1, 1, 1, 1],
-                                    [0, 1, 2, 1, 4, 1, 2, 4, 2],
-                                    [0, 1, 1, 3, 1, 5, 3, 5, 3]])
-
-MUL_SPARSITY_MAP_RIGHT = jnp.array([[0, 0, 0, 0, 0, 0, 0, 0, 0],
-                                    [0, 1, 1, 1, 1, 1, 1, 1, 1],
-                                    [0, 1, 2, 1, 4, 1, 2, 4, 2],
-                                    [0, 1, 1, 3, 1, 5, 3, 5, 3]])
-
-MUL_SPARSITY_MAP_BOTH = jnp.array([[9, 10, 6,  7],
-                                   [7, 6, 10, 12],
-                                   [6, 7, 11, 12],
-                                   [12, 11, 7, 6]])
-
-
-# NOTE also impacts the factors of in_edges
-# TODO implement this!
 
 # Row idx is incoming edge, col idx is outgoing edge
 # Gives the resulting sparsity type if two hyperdimensional Jacobians
 # are added to each other
-ADD_SPARSITY_MAP = jnp.array([[0, 1, 2, 3, 4, 5, 6, 7, 8],
-                              [1, 1, 1, 1, 1, 1, 1, 1, 1],
-                              [2, 1, 2, 1, 1, 1, 2, 1, 2],
-                              [3, 1, 1, 3, 1, 1, 3, 1, 3],
-                              [4, 1, 1, 1, 4, 1, 1, 4, 4],
-                              [5, 1, 1, 1, 1, 5, 1, 5, 5],
-                              [6, 1, 2, 3, 1, 1, 6, 1, 6],
-                              [7, 1, 1, 1, 4, 5, 1, 7, 7],
-                              [8, 1, 2, 3, 4, 5, 6, 7, 8]])
-
-
-# Add sparsity replication algorithm:
-# We devised a simple solution where we just multiply the respective size of the
-# dimension of the Jacobian by negative on if the dimension is replicating
-# TODO implement this!
-
-
-# Impact of pure Kronecker symbols on the resulting add sparsity type:
-# nothing changes compared to the ADD_SPARSITY_MAP except for the cases where
-# both sparsity types indicate a pure Kronecker symbol, then the resulting
-# sparsity type is also a pure Kronecker symbol
-# maybe use modulo operator to implement this?
-# TODO implement this!
-
-
-# Contraction map has to be implemented by hand?
-# NOTE need separate Contraction map for pure Kronecker case since there it also
-# impacts the factors of in_edges!
-
-
-# We should be able to reuse the entire MUL_SPARSITY_MAP for the pure Kronecker
-# case, since the resulting sparsity type is the same as for the diagonal case
-# It just needs some additional if-else conditionals to capture the corner cases
-# when both Jacobians have a pure Kronecker symbol as sparsity type
-# TODO implement this!
+#                     out_edge -9  -8  -7  -6  -5  -4  -3  -2  -1   0   1   2   3   4   5   6   7   8   9   in_edge
+ADD_SPARSITY_MAP = jnp.array([[-9,  1, -9,  1, -5,  4,  1,  1, -9, -7,  1,  1,  1,  4,  5,  1,  7,  1,  7],  # -9
+                              [ 1, -8,  1, -8,  1,  1, -3,  2, -8, -8,  1,  2,  3,  1,  1,  6,  1,  6,  1],  # -8
+                              [-9,  1, -7,  1, -5, -4,  1,  1, -7, -7,  1,  1,  1,  4,  5,  1,  7,  1,  9],  # -7
+                              [ 1, -8,  1, -6,  1,  1, -3, -2, -6, -6,  1,  2,  3,  1,  1,  6,  1,  8,  1],  # -6
+                              [-5,  1, -5,  1, -5,  1,  1,  1, -5, -5,  1,  1,  1,  1,  5,  1,  5,  1,  5],  # -5
+                              [ 4,  1, -4,  1,  1, -4,  1,  1, -4, -4,  1,  1,  1,  4,  1,  1,  4,  1, -4],  # -4
+                              [ 1, -3,  1, -3,  1,  1, -3,  1, -3, -3,  1,  1,  3,  1,  1,  3,  1,  3,  1],  # -3
+                              [ 1,  2,  1, -2,  1,  1,  1, -2, -2, -2,  1,  2,  1,  1,  1,  2,  1, -2,  1],  # -2
+                              [-9, -8, -7, -6, -5, -4, -3, -2, -1, -1,  1,  2,  3,  4,  5,  6,  7,  8,  9],  # -1
+                              [-9, -8, -7, -6, -5, -4, -3, -2, -1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9],  #  0
+                              [ 1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1],  #  1
+                              [ 1,  2,  1,  2,  1,  1,  1,  2,  2,  2,  1,  2,  1,  1,  1,  2,  1,  2,  1],  #  2
+                              [ 1,  3,  1,  3,  1,  1,  3,  1,  3,  3,  1,  1,  3,  1,  1,  3,  1,  3,  1],  #  3
+                              [ 4,  1,  4,  1,  1,  4,  1,  1,  4,  4,  1,  1,  1,  4,  1,  1,  4,  1,  4],  #  4
+                              [ 5,  1 , 5,  1,  5,  1,  1,  1,  5,  5,  1,  1,  1,  1,  5,  1,  5,  1,  5],  #  5
+                              [ 1,  6,  1,  6,  1,  1,  3,  2,  6,  6,  1,  2,  3,  1,  1,  6,  1,  6,  1],  #  6
+                              [ 7,  1 , 7,  1,  5,  4,  1,  1,  7,  7,  1,  1,  1,  4,  5,  1,  7,  1,  7],  #  7
+                              [ 1,  6,  1,  8,  1,  1,  3, -2,  8,  8,  1,  2,  3,  1,  1,  6,  1,  8,  1],  #  8
+                              [ 7,  1,  9,  1,  5, -4,  1,  1,  9,  9,  1,  1,  1,  4,  5,  1,  7,  1,  9]]) #  9
 
 
 Edge = Tuple[int, int]
@@ -219,12 +284,11 @@ def make_empty_edges(info: Array) -> Array:
 
 @partial(jax.vmap, in_axes=(0, 0))
 def sparsity_where(in_edge, out_edge):
-    # takes care of the corner cases where there already exists an edge with a 
+    # Takes care of the corner cases where there already exists an edge with a 
     # different sparsity type
-    i = in_edge.astype(jnp.int32)
-    j = out_edge.astype(jnp.int32)
-    new_sparsity_type = ADD_SPARSITY_MAP[i, j]
-    return lax.select(jnp.logical_and(i < 0, j < 0), -new_sparsity_type, new_sparsity_type)
+    i = in_edge.astype(jnp.int32) + 9
+    j = out_edge.astype(jnp.int32) + 9
+    return ADD_SPARSITY_MAP[i, j]
 
 
 @partial(jax.vmap, in_axes=(1, None))
@@ -233,29 +297,27 @@ def sparsity_fmas_map(in_edge, out_edge):
     TODO add documentation here!
     """
     # Get the sparsity type of the ingoing and outgoing edge
-    i = in_edge[0].astype(jnp.int32)
-    j = out_edge[0].astype(jnp.int32)
+    i = in_edge[0].astype(jnp.int32) + 9
+    j = out_edge[0].astype(jnp.int32) + 9
 
-    new_sparsity_type = MUL_SPARSITY_MAP[i, j]
-    # Take care of the corner cases where we have pure Kronecker symbols
-    new_sparsity_type = lax.select(jnp.logical_and(i < 0, j < 0), 
-                                    -new_sparsity_type, 
-                                    new_sparsity_type)
-    
+    new_sparsity_type = MUL_SPARSITY_MAP[i, j]                                                              
     contraction_map = CONTRACTION_MAP[:, i, j]
-    
-    # jax.debug.print("map {map}", map=contraction_map)
+
+    factors = jnp.concatenate((out_edge[1:3], jnp.abs(out_edge[3:]), in_edge[3:])) # jnp.concatenate((in_edge[3:], jnp.abs(out_edge[3:]), out_edge[1:3]))
     masked_factors = lax.cond(jnp.sum(contraction_map) > 0,
-                                lambda a: jnp.where(contraction_map > 0, a, 1),
-                                lambda a: jnp.zeros(4, dtype=jnp.int32),
-                                out_edge[1:])
-    # jax.debug.print("{in_edge} {out_edge}", in_edge=in_edge[1:3], out_edge=masked_factors)
-    fmas = jnp.prod(in_edge[1:3])*jnp.prod(masked_factors)
+                                lambda a: jnp.where(contraction_map > 0, a, 1), # 1 enables factors, 0 disables factors
+                                lambda a: jnp.zeros(6, dtype=jnp.int32),
+                                factors)
+    # Here we deal with replicating dimensions
+    masked_factors = jnp.where(masked_factors >= 0, masked_factors, 1)
+    
+    fmas = jnp.prod(masked_factors)
+    # jax.debug.print("{out_edge} : {in_edge} : {nst} : {fmas}", out_edge=out_edge, in_edge=in_edge, nst=new_sparsity_type, fmas=fmas)
     return new_sparsity_type, fmas
 
 
-# TODO exchange in_edges and out_edges
-def get_fmas_of_jacprod(all_edges, fmas, in_edges, out_edges, nonzero, vertex, num_i):
+def get_fmas_jacprod(all_edges, fmas, in_edges, out_edges, nonzero, vertex, num_i):
+    # jax.debug.print("vertex {vertex}", vertex=vertex)
     # Define aliases
     in_edges_primals = in_edges[3:, :]
     in_edges_outs = in_edges[1:3, :]
@@ -266,22 +328,21 @@ def get_fmas_of_jacprod(all_edges, fmas, in_edges, out_edges, nonzero, vertex, n
     # Calculate fmas
     # Select only the edges that are connected to the vertex through code below
     new_sparsity, _fmas = sparsity_fmas_map(in_edges, out_edges[:, vertex+num_i-1])
-    # jax.debug.print("{ins}", ins=in_edges)
-    # jax.debug.print("{out}", out=out_edges[:, vertex+num_i-1])
-    # jax.debug.print("{fmas}", fmas=_fmas)
+    fmas = jnp.sum(_fmas)
     
     # Calculate resulting sparsity type
     new_sparsity = sparsity_where(out_edges[0, :], new_sparsity)
     new_sparsity = jnp.broadcast_to(new_sparsity, (1, *new_sparsity.shape))
-    fmas = jnp.sum(_fmas)
+
     # In shape new edges
-    new_edges_ins = jnp.where(in_edges_primals[1] > 0, in_edges_primals, out_edges_primals)
+    new_edges_ins = jnp.where(in_edges_primals[1] != 0, in_edges_primals, out_edges_primals)
     
     # Out shape new edges
     new_edges_outs = jnp.broadcast_to(out_edges_outs[:, vertex+num_i-1, jnp.newaxis], out_edges_outs.shape)
-    new_edges_outs = jnp.where(in_edges_outs[1] > 0, new_edges_outs, out_edges_outs)
+    new_edges_outs = jnp.where(in_edges_outs[1] != 0, new_edges_outs, out_edges_outs)
+    
+    # Assemble new edges
     new_edges = jnp.concatenate((new_sparsity, new_edges_outs, new_edges_ins), axis=0)
-    # jax.debug.print("new col {col}", col=new_edges[0, :])
         
     # Set the Jacobian adjacency matrix
     all_edges = lax.dynamic_update_index_in_dim(all_edges, new_edges, nonzero, -1)
@@ -305,7 +366,6 @@ def vertex_eliminate(vertex: int, graph: Array) -> Tuple[Array, float]:
         A tuple that contains the new edge representation of the computational
         graph and the number of fmas (fused multiplication-addition ops).
     """
-    # jax.debug.print("{graph}", graph=graph[0, :, :])
     num_i, num_v = get_shape(graph)
     edges = graph[:, 1:, :]
     in_edges = edges[:, :, vertex-1]
@@ -315,25 +375,24 @@ def vertex_eliminate(vertex: int, graph: Array) -> Tuple[Array, float]:
         out_edges = edges[:, :, nonzero]
         # Calculate the fma operations and the new shapes of the Jacobians for 
         # the respective and update the vertex
-        edges, _fmas = lax.cond(nonzero > -1, 
-                                lambda e, f, ie, oe, nz, v: get_fmas_of_jacprod(e, f, ie, oe, nz, v, num_i), 
+        edges, _fmas = lax.cond(nonzero > -10, 
+                                lambda e, f, ie, oe, nz, v: get_fmas_jacprod(e, f, ie, oe, nz, v, num_i), 
                                 lambda e, f, ie, oe, nz, v: (e, 0), 
                                 edges, fmas, in_edges, out_edges, nonzero, vertex)
         fmas += _fmas        
         carry = (edges, fmas)
         return carry, None
     
-    nonzeros = jnp.nonzero(edges[0, num_i+vertex-1, :], size=num_v, fill_value=-1)[0].T
-        
+    nonzeros = jnp.nonzero(edges[0, num_i+vertex-1, :], size=num_v, fill_value=-10)[0].T
     output, _ = lax.scan(update_edges_fn, (edges, 0), nonzeros)
     new_edges, fmas = output
+    
     # Delete old edges
     new_edges = new_edges.at[:, num_i+vertex-1, :].set(0)
     new_edges = new_edges.at[:, :, vertex-1].set(0)
 
     graph = graph.at[1, 0, vertex-1].set(1)
     graph = graph.at[:, 1:, :].set(new_edges)
-    # jax.debug.print("{vertex} {fmas}", vertex=vertex, fmas=fmas)
     return graph, fmas
 
 
@@ -359,11 +418,12 @@ def cross_country(order: Sequence[int], edges: Array) -> Array:
                                 lambda e: (e, 0),
                                _edges)
         fmas += _fmas
+        jax.debug.print("{v}:{fmas}", v=vertex, fmas=_fmas)
         carry = (_edges, fmas)
         return carry, _fmas
     vertices = jnp.array(order)
-    output, fmas = lax.scan(cc_fn, (edges, 0), vertices)
-    return output, fmas
+    output, _ = lax.scan(cc_fn, (edges, 0), vertices)
+    return output
 
 
 def forward(edges: Array):
@@ -383,8 +443,7 @@ def forward(edges: Array):
     """
     num_i, num_vo = get_shape(edges)
     order = jnp.arange(1, num_vo+1)
-    output, _ = cross_country(order, edges)
-    return output
+    return cross_country(order, edges)
 
 
 def reverse(edges: Array):
@@ -404,6 +463,5 @@ def reverse(edges: Array):
     """
     num_i, num_vo = get_shape(edges)
     order = jnp.arange(1, num_vo+1)[::-1]
-    output, _ = cross_country(order, edges)
-    return output
+    return cross_country(order, edges)
 

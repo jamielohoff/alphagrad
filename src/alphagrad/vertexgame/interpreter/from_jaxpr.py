@@ -87,7 +87,7 @@ def make_graph(f_jaxpr: Union[ClosedJaxpr, Callable], *xs: Array) -> Array:
                         
         # Resolves primitive and adds it to the edge representation matrix
         add_vertex_fn = vertex_registry[eqn.primitive]
-        edges = add_vertex_fn(edges, eqn, variables)      
+        edges = add_vertex_fn(edges, eqn, variables, **eqn.params)      
      
     # Processing output variables
     for outvar in jaxpr.jaxpr._outvars:
