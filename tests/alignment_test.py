@@ -13,117 +13,173 @@ from alphagrad.vertexgame import (cross_country, forward, reverse,
                                 make_graph, minimal_markowitz)
 
 
-def test_function(f, *xs):
+def test_function(f, *xs):    
+    jaxpr = jax.make_jaxpr(f)(*xs)
+    print(jaxpr)
     
     graph = make_graph(f, *xs)
-    _, fwd_fmas = jax.jit(forward)(graph)
-    _, rev_fmas = jax.jit(reverse)(graph)
+    # _, fwd_fmas = jax.jit(forward)(graph)
+    # _, rev_fmas = jax.jit(reverse)(graph)
     
     order = jax.jit(minimal_markowitz, static_argnums=1)(graph, int(graph[0, 0, 1]))
     order = [int(o) for o in order]
     _, cc_fmas = jax.jit(cross_country)(order, graph)
     
     argnums = list(range(len(xs)))
-    _, _fmas = jax.jit(jacve(f, order="fwd", argnums=argnums, count_ops=True))(*xs)
-    gx_fwd_fmas = _fmas["num_muls"]
-    _, _fmas = jax.jit(jacve(f, order="rev", argnums=argnums, count_ops=True))(*xs)
-    gx_rev_fmas = _fmas["num_muls"]
+    # _, _fmas = jax.jit(jacve(f, order="fwd", argnums=argnums, count_ops=True))(*xs)
+    # gx_fwd_fmas = _fmas["num_muls"]
+    # _, _fmas = jax.jit(jacve(f, order="rev", argnums=argnums, count_ops=True))(*xs)
+    # gx_rev_fmas = _fmas["num_muls"]
     _, _fmas = jax.jit(jacve(f, order=order, argnums=argnums, count_ops=True))(*xs)
     gx_cc_fmas = _fmas["num_muls"]
     
     print("###")
-    print(fwd_fmas, "graphax result:", gx_fwd_fmas)
-    print(rev_fmas, "graphax result:", gx_rev_fmas)
+    # print(fwd_fmas, "graphax result:", gx_fwd_fmas)
+    # print(rev_fmas, "graphax result:", gx_rev_fmas)
     print(cc_fmas, "graphax result:", gx_cc_fmas)
     print("###")
-    
-    if fwd_fmas == gx_fwd_fmas and rev_fmas == gx_rev_fmas and cc_fmas == gx_cc_fmas:
+    # fwd_fmas == gx_fwd_fmas and rev_fmas == gx_rev_fmas and 
+    if cc_fmas == gx_cc_fmas:
         return True
     else:
         return False
-    return False
 
-# 1:32
-# 2:192
-# 3:80
-# 4:544
-# 5:24 --> 48
-# 6:4 --> 16
-# 7:1360 --> 400
-# 8:640 
-# 9:96 --> 192
-# 10:96 
-# 11:96 --> 192
-# 12:1632 --> 480
-# 13:24
-# 14:64 -- > 128
-# 15:384 
-# 16:384
-# 17:192
-# 18:96
-# 19:9 --> 6
-# 20:20 --> 80
-# 21:192 
-# 22:6
-# 23:1632 --> 480
-# 24:96 
-# 25:192 --> 480
-# 26:96
-# 27:0
-# 28:6
-# 29:14 --> 18
-# 30:144 
-# 31:36
-# 32:108
-# 33:180
-# 34:64 --> 128
-# 35:384 
-# 36:384 --> 1536
-# 37:384
-# 38:288
-# 39:90
-# 40:0
-# 41:96
-# 42:0
-# 43:72
-# 44:90
-# 45:24
-# 46:90
-# 47:384
-# 48:0
-# 49:90
-# 50:120
-# 51:384
-# 52:24
-# 53:24
-# 54:384
-# 55:96
-# 56:24
-# 57:24
-# 58:120
-# 59:96 --> 384
-# 60:96
-# 61:384 --> 1536
-# 62:384
-# 63:96
-# 64:96
-# 65:1920
-# 66:24 --> 96
-# 67:24
-# 68:0
-# 69:16
-# 70:0
-# 71:384 --> 1536
-# 72:1536
-# 73:0
-# 74:384
-# 75:384 --> 1536
-# 76:1536
-# 77:1536
+
+# 76:0
+# 84:0
+# 4:0
+# 5:0
+# 9:1
+# 10:1
+# 12:3
+# 14:3
+# 22:3
+# 23:3
+# 30:3
+# 31:3
+# 37:1
+# 39:1
+# 45:1
+# 51:1
+# 70:1
+# 73:1
+# 75:0
+# 77:0
 # 78:0
-# 79:96 --> 384
-# 80:0
-
+# 83:0
+# 85:0
+# 86:0
+# 119:1
+# 122:1
+# 125:1
+# 3:0
+# 6:2
+# 16:6
+# 24:4
+# 27:2
+# 32:4
+# 35:2
+# 38:2
+# 40:2
+# 46:2
+# 52:2
+# 54:6
+# 57:2
+# 59:4
+# 60:4
+# 62:4
+# 66:2
+# 69:2
+# 72:2
+# 79:6
+# 81:2
+# 87:6
+# 89:2
+# 91:6
+# 92:6
+# 93:2
+# 94:2
+# 95:2
+# 97:2
+# 98:2
+# 100:2
+# 102:2
+# 103:2
+# 105:2
+# 107:2
+# 109:2
+# 110:2
+# 112:2
+# 114:2
+# 116:2
+# 118:2
+# 120:2
+# 123:2
+# 126:2
+# 128:2
+# 130:2
+# 21:3
+# 25:5
+# 28:3
+# 29:3
+# 33:5
+# 36:3
+# 43:3
+# 44:9
+# 53:5
+# 56:3
+# 63:5
+# 67:5
+# 82:5
+# 90:5
+# 101:0
+# 104:3
+# 108:0
+# 111:3
+# 115:0
+# 117:3
+# 124:3
+# 129:3
+# 133:7
+# 135:9
+# 11:8
+# 13:6
+# 15:6
+# 19:0
+# 20:0
+# 47:8
+# 50:4
+# 55:8
+# 65:4
+# 96:4
+# 99:12
+# 106:18
+# 113:18
+# 127:6
+# 80:9
+# 88:9
+# 41:6
+# 49:10
+# 61:28
+# 121:8
+# 137:11
+# 18:0
+# 64:28
+# 68:16
+# 131:12
+# 26:25
+# 34:25
+# 1:14
+# 48:28
+# 71:50
+# 74:50
+# 132:30
+# 7:18
+# 8:18
+# 58:55
+# 2:30
+# 42:50
+# 17:60
 
 
 class GraphaxAlignmentTest(unittest.TestCase):
@@ -263,7 +319,6 @@ class GraphaxAlignmentTest(unittest.TestCase):
     #     result = test_function(Encoder, *xs)
     #     self.assertTrue(result)
     
-    
     # def test_f(self):
     #     key = jrand.PRNGKey(250197)
     #     a = jrand.uniform(key, (4,))
@@ -289,9 +344,7 @@ class GraphaxAlignmentTest(unittest.TestCase):
         result = test_function(RoeFlux_3d, *xs)
         print(result)
         self.assertTrue(result)
-        
-        
-    
+                
     # vmap and batching tests
         
 

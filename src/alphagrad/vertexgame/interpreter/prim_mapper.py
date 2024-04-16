@@ -24,6 +24,21 @@ def get_shape(var: Var):
     return var_shape
 
 
+def _get_shape(var: Var):
+    """
+    Returns the appropriate shape of a singleton, vector or matrix.
+    Singletons are treated as tensors with shape (1, 1)
+    Row- and column vectors are treated as tensors with shape (1, n) and (n, 1)
+    Matrices are treated as tensors of shape (n, m)
+    """
+    var_shape = jnp.array(var.aval.shape)
+    if var.aval.size == 1:
+        var_shape = jnp.array([0, 0])
+    if len(var.aval.shape) == 1:
+        var_shape = jnp.array([var.aval.shape[0], 0])
+    return var_shape
+
+
 def filter_invars(eqn, variables):
     filtered = [invar for invar in eqn.invars if isinstance(invar, Var)]
     return [invar for invar in filtered if variables[str(invar)] != -1]
@@ -109,8 +124,9 @@ def add_bi_vertex(edges, eqn, variables, **params):
     filtered_invars = filter_invars(eqn, variables)
     
     for invar in filtered_invars:
-        _invar_shape = get_shape(invar)
         idx = eqn.invars.index(invar)
+        
+        _invar_shape = get_shape(invar)
         _other_invar_shape = get_shape(eqn.invars[1-idx])
         _outvar_shape = get_shape(eqn.outvars[0])
     
@@ -120,19 +136,19 @@ def add_bi_vertex(edges, eqn, variables, **params):
             if _outvar_shape[0] == 1 and _outvar_shape[1] == 1:
                 sparsity_type = 1
             # Output is column-vector
-            elif _outvar_shape[0] > 1 and _outvar_shape[1] == 1:
+            elif _outvar_shape[0] > 0 and _outvar_shape[1] == 1:
                 sparsity_type = 1
             # Output is row-vector
-            elif _outvar_shape[0] == 1 and _outvar_shape[1] > 1:
+            elif _outvar_shape[0] == 1 and _outvar_shape[1] > 0:
                 sparsity_type = 1
             # Output is matrix
             else:
                 sparsity_type = 1
                 
         # Input is column-vector 
-        elif _invar_shape[0] > 1 and _invar_shape[1] == 1:
+        elif _invar_shape[0] > 0 and _invar_shape[1] == 1:
             # Output is column-vector
-            if _outvar_shape[0] > 1 and _outvar_shape[1] == 1:
+            if _outvar_shape[0] > 0 and _outvar_shape[1] == 1:
                 if _other_invar_shape[0] == 1 and _other_invar_shape[1] == 1:
                     # Here we cover the case where the other invar is a scalar
                     sparsity_type = -2
@@ -143,9 +159,9 @@ def add_bi_vertex(edges, eqn, variables, **params):
                 sparsity_type = 2
                 
         # Input is row-vector      
-        elif _invar_shape[0] == 1 and _invar_shape[1] > 1:
+        elif _invar_shape[0] == 1 and _invar_shape[1] > 0:
             # Output is row-vector
-            if _outvar_shape[0] == 1 and _outvar_shape[1] > 1:
+            if _outvar_shape[0] == 1 and _outvar_shape[1] > 0:
                 if _other_invar_shape[0] == 1 and _other_invar_shape[1] == 1:
                     # Here we cover the case where the other invar is a scalar
                     sparsity_type = -3
@@ -157,11 +173,14 @@ def add_bi_vertex(edges, eqn, variables, **params):
                 
         # Input is matrix
         else:
+            # Handling broadcasting
             if _other_invar_shape[0] == 1 and _other_invar_shape[1] == 1:
                 sparsity_type = 10
-            elif _other_invar_shape[0] > 1 and _other_invar_shape[1] == 1:
+            if _other_invar_shape[0] == 0 and _other_invar_shape[1] == 0:
+                sparsity_type = 10
+            elif _other_invar_shape[0] > 0 and _other_invar_shape[1] == 1:
                 sparsity_type = -8
-            elif _other_invar_shape[0] == 1 and _other_invar_shape[1] > 1:
+            elif _other_invar_shape[0] == 1 and _other_invar_shape[1] > 0:
                 sparsity_type = 8
             else:
                 sparsity_type = 6
@@ -170,7 +189,12 @@ def add_bi_vertex(edges, eqn, variables, **params):
         i = variables[str(invar)]
         j = variables[str(eqn.outvars[0])] - num_i - 1
         
-        structure = jnp.concatenate([jnp.array([sparsity_type]), _outvar_shape, _invar_shape]) 
+        invar_shape = get_shape(invar)
+        other_invar_shape = get_shape(eqn.invars[1-idx])
+        outvar_shape = get_shape(eqn.outvars[0])
+
+        structure = jnp.concatenate([jnp.array([sparsity_type]), outvar_shape, invar_shape]) 
+        # print("structure", structure)
         edges = edges.at[:, i, j].set(structure)
     return edges
 
@@ -191,40 +215,25 @@ def add_dot_general_vertex(edges, eqn, variables, **params):
     Dot general contains matrix-vector, vector-matrix, matrix-matrix and 
     dot products as a subset.
     """
-    lhs_invar_shape = get_shape(eqn.invars[0])
-    rhs_invar_shape = get_shape(eqn.invars[1])
-    _outvar_shape = get_shape(eqn.outvars[0])
-    
+    _lhs_invar_shape = _get_shape(eqn.invars[0])
+    _rhs_invar_shape = _get_shape(eqn.invars[1])
+    _outvar_shape = _get_shape(eqn.outvars[0])
+        
     lhs_sparsity_type = 1
     rhs_sparsity_type = 1
     
     dims  = params["dimension_numbers"]
     ldim = dims[0][0][0]
     rdim = dims[0][1][0]
-    
-    # lhs is singleton
-    if lhs_invar_shape[0] == 1 and lhs_invar_shape[1] == 1:
-        # rhs is singleton
-        if rhs_invar_shape[0] == 1 and rhs_invar_shape[1] == 1:
-            lhs_sparsity_type = 1
-            rhs_sparsity_type = 1
-        # rhs is row-vector
-        elif rhs_invar_shape[0] == 1 and rhs_invar_shape[1] > 1:
-            lhs_sparsity_type = 1
-            rhs_sparsity_type = 1
-            
+                    
     # lhs is column-vector
-    elif lhs_invar_shape[0] > 1 and lhs_invar_shape[1] == 1:
-        # rhs is singleton
-        if rhs_invar_shape[0] == 1 and rhs_invar_shape[1] == 1:
-            lhs_sparsity_type = 1
-            rhs_sparsity_type = 1
+    if _lhs_invar_shape[0] > 0 and _lhs_invar_shape[1] == 0:
         # rhs is column-vector, i.e. dot product
-        elif rhs_invar_shape[0] > 1 and rhs_invar_shape[1] == 1:
+        if _rhs_invar_shape[0] > 0 and _rhs_invar_shape[1] == 0:
             lhs_sparsity_type = 1
             rhs_sparsity_type = 1
         # rhs is row-vector, i.e. dot product
-        elif rhs_invar_shape[0] == 1 and rhs_invar_shape[1] > 1:
+        elif _rhs_invar_shape[0] == 1 and _rhs_invar_shape[1] > 0:
             if ldim == 0 and rdim == 1:
                 lhs_sparsity_type = -3
                 rhs_sparsity_type = -2
@@ -236,45 +245,60 @@ def add_dot_general_vertex(edges, eqn, variables, **params):
             lhs_sparsity_type = -4
             rhs_sparsity_type = -3
     
-    # lhs is row-vector
-    elif lhs_invar_shape[0] == 1 and lhs_invar_shape[1] > 1:                   
-        # rhs is column_vector
-        if rhs_invar_shape[0] == 1 and rhs_invar_shape[1] == 1:
-            lhs_sparsity_type = 1
-            rhs_sparsity_type = -3
-        # rhs is matrix
-        elif rhs_invar_shape[0] > 1 and rhs_invar_shape[1] > 1:
-            lhs_sparsity_type = 1
-            rhs_sparsity_type = -3
+    # # lhs is row-vector
+    # elif _lhs_invar_shape[0] == 1 and _lhs_invar_shape[1] > 0:                  
+    #     # rhs is column_vector
+    #     if _rhs_invar_shape[0] > 0 and _rhs_invar_shape[1] == 0:
+    #         lhs_sparsity_type = 1
+    #         rhs_sparsity_type = -3
+    #     # rhs is matrix
+    #     elif _rhs_invar_shape[0] > 0 and _rhs_invar_shape[1] > 0:
+    #         lhs_sparsity_type = 1
+    #         rhs_sparsity_type = -3
         
     # lhs is matrix
     else:
         # rhs is column-vector
-        if rhs_invar_shape[0] > 1 and rhs_invar_shape[1] == 1:
+        if _rhs_invar_shape[0] > 0 and _rhs_invar_shape[1] == 0:
             lhs_sparsity_type = -2
             rhs_sparsity_type = 1
+        # rhs is row-vector
+        # elif _rhs_invar_shape[0] == 1 and _rhs_invar_shape[1] > 0:
+        #     lhs_sparsity_type = -4
+        #     rhs_sparsity_type = -5
         # rhs is matrix
-        elif rhs_invar_shape[0] > 1 and rhs_invar_shape[1] > 1:
-            lhs_sparsity_type = -2
-            rhs_sparsity_type = -3
-         # rhs is matrix
-        elif rhs_invar_shape[0] == 1 and rhs_invar_shape[1] > 1:
-            lhs_sparsity_type = -4
-            rhs_sparsity_type = -5
+        elif _rhs_invar_shape[0] > 0 and _rhs_invar_shape[1] > 0:
+            if ldim == 1 and rdim == 0:
+                lhs_sparsity_type = -2
+                rhs_sparsity_type = -3
+            elif ldim == 1 and rdim == 1:
+                lhs_sparsity_type = -2
+                rhs_sparsity_type = -5
+            elif ldim == 0 and rdim == 0:
+                lhs_sparsity_type = -4
+                rhs_sparsity_type = -3
+            elif ldim == 0 and rdim == 1:
+                lhs_sparsity_type = -4
+                rhs_sparsity_type = -5
             
     # Treat Literals and Vars appropriately
     num_i = edges.at[0, 0, 0].get()
     j = variables[str(eqn.outvars[0])] - num_i - 1
+    
+    lhs_invar_shape = get_shape(eqn.invars[0])
+    rhs_invar_shape = get_shape(eqn.invars[1])
+    outvar_shape = get_shape(eqn.outvars[0])
+    
     # Only first variable is a Var
     if isinstance(eqn.invars[0], Var) and not isinstance(eqn.invars[1], Var):
         il = variables[str(eqn.invars[0])]
-        lhs_structure = jnp.concatenate([jnp.array([lhs_sparsity_type]), _outvar_shape, lhs_invar_shape]) 
+        lhs_structure = jnp.concatenate([jnp.array([lhs_sparsity_type]), outvar_shape, lhs_invar_shape]) 
         edges = edges.at[:, il, j].set(lhs_structure)
         
     # Only second variable is a Var
     elif not isinstance(eqn.invars[0], Var) and isinstance(eqn.invars[1], Var):
         ir = variables[str(eqn.invars[1])]
-        rhs_structure = jnp.concatenate([jnp.array([rhs_sparsity_type]), _outvar_shape, rhs_invar_shape]) 
+        rhs_structure = jnp.concatenate([jnp.array([rhs_sparsity_type]), outvar_shape, rhs_invar_shape]) 
         edges = edges.at[:, ir, j].set(rhs_structure)
         
     # Both variables are of type `Var`
@@ -282,12 +306,12 @@ def add_dot_general_vertex(edges, eqn, variables, **params):
         il = variables[str(eqn.invars[0])]
         ir = variables[str(eqn.invars[1])]
         
-        lhs_structure = jnp.concatenate([jnp.array([lhs_sparsity_type]), _outvar_shape, lhs_invar_shape]) 
+        lhs_structure = jnp.concatenate([jnp.array([lhs_sparsity_type]), outvar_shape, lhs_invar_shape]) 
         edges = edges.at[:, il, j].set(lhs_structure)
         
-        rhs_structure = jnp.concatenate([jnp.array([rhs_sparsity_type]), _outvar_shape, rhs_invar_shape]) 
+        rhs_structure = jnp.concatenate([jnp.array([rhs_sparsity_type]), outvar_shape, rhs_invar_shape]) 
         edges = edges.at[:, ir, j].set(rhs_structure)
-    print(eqn.invars, lhs_structure, rhs_structure)
+    # print("dot", eqn.outvars, eqn.invars, lhs_structure, rhs_structure, dims)
     return edges
     
 vertex_registry[lax.dot_general_p] = add_dot_general_vertex
@@ -297,7 +321,11 @@ def add_sum_vertex(edges, eqn, variables, **params):
     """
     Adds a vertex for an accumulation function.
     """
+    axes = params["axes"]
     filtered_invars = filter_invars(eqn, variables)
+    
+    invar_shape = _get_shape(filtered_invars[0])
+    outvar_shape = _get_shape(eqn.outvars[0])
     
     _invar_shape = get_shape(filtered_invars[0])
     _outvar_shape = get_shape(eqn.outvars[0])
@@ -306,15 +334,19 @@ def add_sum_vertex(edges, eqn, variables, **params):
     sparsity_type = 1
 
     # Input is matrix
-    if _invar_shape[0] > 1 and _invar_shape[1] > 1: 
+    if invar_shape[0] > 0 and invar_shape[1] > 0: 
          # Output is number, i.e. all elements are summed
-        if _outvar_shape[0] == 1 and _outvar_shape[1] == 1:
+        if outvar_shape[0] == 0 and outvar_shape[1] == 0:
             sparsity_type = 1
         # Output is column-vector, i.e. summing over rows
-        elif _outvar_shape[0] > 1 and _outvar_shape[1] == 1:
-            sparsity_type = -2
+        elif outvar_shape[0] > 0 and outvar_shape[1] == 0:
+            if axes[0] == 0:
+                sparsity_type = -4
+            else:
+                sparsity_type = -2
+
         # Output is row-vector, i.e. summing over columns
-        elif _outvar_shape[0] == 1 and _outvar_shape[1] > 1:
+        elif outvar_shape[0] == 1 and outvar_shape[1] > 0:
             sparsity_type = -3
     
     num_i = edges.at[0, 0, 0].get()
@@ -353,24 +385,28 @@ def add_reduce_vertex(edges, eqn, variables, **params):
     """
     Adds a vertex for an accumulation function.
     """
+    axes = params["axes"]
     filtered_invars = filter_invars(eqn, variables)
+    
+    invar_shape = _get_shape(filtered_invars[0])
+    outvar_shape = _get_shape(eqn.outvars[0])
     
     _invar_shape = get_shape(filtered_invars[0])
     _outvar_shape = get_shape(eqn.outvars[0])
     
     # Input is singleton or row/column vector or matrix
-    sparsity_type = 6
+    sparsity_type = 1
     
     # Input is matrix
-    if _invar_shape[0] > 1 and _invar_shape[1] > 1: 
+    if invar_shape[0] > 0 and invar_shape[1] > 0: 
          # Output is number, i.e. all elements are summed
-        if _outvar_shape[0] == 1 and _outvar_shape[1] == 1:
-            sparsity_type = 6
+        if outvar_shape[0] == 0 and outvar_shape[1] == 0:
+            sparsity_type = 1
         # Output is column-vector, i.e. summing over rows
-        elif _outvar_shape[0] > 1 and _outvar_shape[1] == 1:
+        elif outvar_shape[0] > 0 and outvar_shape[1] == 0:
             sparsity_type = 2
         # Output is row-vector, i.e. summing over columns
-        elif _outvar_shape[0] == 1 and _outvar_shape[1] > 1:
+        elif outvar_shape[0] == 1 and outvar_shape[1] > 1:
             sparsity_type = 3
     
     num_i = edges.at[0, 0, 0].get()
@@ -506,7 +542,7 @@ def add_reshape_gradient_vertex(edges, eqn, variables, **params):
     """
     filtered_invars = filter_invars(eqn, variables)
     
-    # Handle literal inputs
+    # Handle literals
     if len(filtered_invars) == 0:
         return edges
     
@@ -520,6 +556,7 @@ def add_reshape_gradient_vertex(edges, eqn, variables, **params):
     j = variables[str(eqn.outvars[0])] - num_i - 1
 
     structure = jnp.concatenate([jnp.array([sparsity_type]), _outvar_shape, _invar_shape]) 
+
     edges = edges.at[:, i, j].set(structure)
     return edges
 

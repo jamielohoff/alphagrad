@@ -39,6 +39,7 @@ NOTE: No support for higher-order tensors yet!
 
 Sparsity types explanation:
 --- Mixed types ---
+11: TBD
 10: K(1, 3) and K(2, 4), basically a constant multiple of the Kronecker symbol
 9: K(1, 4) and (2, 3)
 8: K(1, 3) and (2, 4)
@@ -316,7 +317,6 @@ def sparsity_where(in_edge, out_edge):
     # different sparsity type
     i = in_edge.astype(jnp.int32) + OFFSET
     j = out_edge.astype(jnp.int32) + OFFSET
-    # jax.debug.print("{i} : {j} : {map}", i=i-10, j=j-10, map=ADD_SPARSITY_MAP[i, j])
     return ADD_SPARSITY_MAP[i, j]
 
 
@@ -347,7 +347,6 @@ def sparsity_fmas_map(in_edge, out_edge):
 
 
 def get_fmas_jacprod(all_edges, fmas, in_edges, out_edges, nonzero, vertex, num_i):
-    # jax.debug.print("vertex {vertex}", vertex=vertex)
     # Define aliases
     in_edges_primals = in_edges[3:, :]
     in_edges_outs = in_edges[1:3, :]

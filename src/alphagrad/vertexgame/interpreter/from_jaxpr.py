@@ -76,7 +76,7 @@ def make_graph(f_jaxpr: Union[ClosedJaxpr, Callable], *xs: Array) -> Array:
         counter += 1
 
     # Process intermediate variables
-    for eqn in eqns:
+    for i, eqn in enumerate(eqns, start=1):
         is_invar_list.extend(eqn.invars)
         # Ignore calculation with just literals, i.e. constant values
         for outvar in eqn.outvars:
@@ -86,6 +86,7 @@ def make_graph(f_jaxpr: Union[ClosedJaxpr, Callable], *xs: Array) -> Array:
                 counter += 1
                         
         # Resolves primitive and adds it to the edge representation matrix
+        # print(i, eqn.outvars[0])
         add_vertex_fn = vertex_registry[eqn.primitive]
         edges = add_vertex_fn(edges, eqn, variables, **eqn.params)      
      
