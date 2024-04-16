@@ -14,7 +14,7 @@ from alphagrad.vertexgame import (step, make_graph, safe_preeliminations,
 from graphax.examples.roe import RoeFlux_1d
 
 from alphagrad.utils import get_masked_logits, make_init_state
-from alphagrad.environment_interaction import (make_recurrent_fn,
+from alphagrad.alphazero.environment_interaction import (make_recurrent_fn,
                                                 make_environment_interaction)
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "2"

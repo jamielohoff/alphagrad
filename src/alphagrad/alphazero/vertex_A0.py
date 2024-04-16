@@ -111,10 +111,10 @@ from alphagrad.utils import (A0_loss,
               				make_init_state,
                       		postprocess_data,
                         	make_batch)
-from alphagrad.environment_interaction import (make_recurrent_fn,
+from alphagrad.alphazero.environment_interaction import (make_recurrent_fn,
 											make_environment_interaction)
 
-from alphagrad.sequential_transformer import SequentialTransformerModel
+from alphagrad.transformer.sequential_transformer import SequentialTransformerModel
 from alphagrad.evaluate import (evaluate_tasks, 
 								make_Markowitz_reference_values, 
                                 evaluate_benchmark)

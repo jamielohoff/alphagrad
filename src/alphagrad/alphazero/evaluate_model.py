@@ -65,9 +65,9 @@ from alphagrad.vertexgame.transforms import (minimal_markowitz,
 from alphagrad.vertexgame import step
 
 from alphagrad.utils import get_masked_logits
-from alphagrad.environment_interaction import (make_recurrent_fn,
+from alphagrad.alphazero.environment_interaction import (make_recurrent_fn,
 							                    make_environment_interaction)
-from alphagrad.sequential_transformer import SequentialTransformerModel
+from alphagrad.transformer.sequential_transformer import SequentialTransformerModel
 from alphagrad.evaluate import evaluate
 
 

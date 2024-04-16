@@ -2,8 +2,8 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrand
 
-from alphagrad.sequential_transformer import SequentialTransformerModel
-from alphagrad.experiment import AlphaGradExperiment, Paths
+from alphagrad.transformer.sequential_transformer import SequentialTransformerModel
+from alphagrad.alphazero.experiment import AlphaGradExperiment, Paths
 
 
 print(jax.device_count())

@@ -6,7 +6,7 @@ import jax.random as jrand
 
 from graphax.examples import Helmholtz
 from alphagrad import make_graph
-from alphagrad.sequential_transformer import SequentialTransformerModel
+from alphagrad.transformer.sequential_transformer import SequentialTransformerModel
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 

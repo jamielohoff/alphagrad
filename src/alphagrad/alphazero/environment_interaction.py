@@ -11,7 +11,7 @@ from chex import PyTreeDef
 import mctx
 import equinox as eqx
 
-from .utils import symexp
+from ..utils import symexp
 
 
 import time

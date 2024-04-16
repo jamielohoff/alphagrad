@@ -290,6 +290,13 @@ def get_shape(edges: Array):
     return num_i, num_v
 
 
+def get_graph_shape(graph: Array) -> Array:
+    num_i = graph.at[0, 0, 0].get()
+    num_vo = graph.at[0, 0, 1].get() + graph.at[0, 0, 2].get()
+    num_o = graph.at[0, 0, 2].get()
+    return jnp.array([num_i, num_vo, num_o])
+
+
 def get_output_mask(edges: Array):
     return edges[2, 0, :]
 

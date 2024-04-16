@@ -19,108 +19,56 @@ import distrax
 import optax
 import equinox as eqx
 
-from graphax.examples import RoeFlux_1d, RobotArm_6DOF, EncoderDecoder, ADALIF_SNN, f, g
+import graphax as gx
+from graphax.examples import RoeFlux_1d, RobotArm_6DOF, EncoderDecoder, ADALIF_SNN, f, g, Helmholtz
 from alphagrad.vertexgame import step, make_graph, forward, reverse, cross_country
+from alphagrad.vertexgame.runtime_game import RuntimeGame, _get_reward
 from alphagrad.vertexgame.transforms import minimal_markowitz, embed
 from alphagrad.utils import symlog, symexp
-from alphagrad.sequential_transformer import SequentialTransformerModel
+from alphagrad.transformer.sequential_transformer import SequentialTransformerModel
 
 import matplotlib.pyplot as plt
 
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ["CUDA_VISIBLE_DEVICES"] = str(1)
+os.environ["CUDA_VISIBLE_DEVICES"] = str(2)
+
 key = jrand.PRNGKey(250197)
-
-
-# RoeFlux @ 340 mults
-# [36, 24, 81, 75, 72, 59, 89, 57, 27, 52, 42, 10, 46, 91, 70, 44, 16, 99, 97, 
-# 43, 95, 4, 37, 8, 3, 66, 41, 7, 67, 38, 14, 1, 77, 58, 83, 26, 74, 78, 50, 49, 
-# 86, 15, 47, 73, 28, 64, 21, 31, 84, 0, 62, 18, 6, 94, 76, 87, 56, 13, 39, 34, 
-# 82, 90, 25, 88, 65, 33, 80, 79, 32, 30, 92, 68, 85, 20, 71, 55, 12, 54, 93, 61, 
-# 45, 9, 53, 60, 48, 69, 40, 51, 19, 2, 22, 5, 29, 23, 63, 11, 17, 35]
-
-# RoeFlux @ 335 mults
-# [38, 46, 44, 20, 95, 24, 89, 72, 83, 86, 8, 7, 82, 42, 3, 79, 91, 30, 52, 26, 
-# 10, 4, 25, 18, 16, 80, 41, 28, 99, 9, 68, 50, 81, 71, 12, 75, 84, 67, 93, 53, 
-# 43, 36, 47, 73, 37, 33, 21, 32, 45, 97, 85, 31, 59, 94, 27, 58, 78, 6, 61, 34, 
-# 90, 92, 15, 88, 5, 62, 76, 49, 39, 2, 60, 56, 77, 14, 57, 55, 70, 54, 13, 74, 
-# 64, 17, 87, 63, 0, 65, 66, 69, 51, 40, 1, 48, 22, 19, 23, 35, 29, 11]
-
-# RoeFlux # 327 mults
-# [38, 46, 44, 20, 95, 24, 89, 72, 83, 86, 8, 7, 82, 42, 3, 79, 91, 30, 52, 26, 
-# 10, 4, 32, 18, 37, 80, 41, 97, 99, 9, 68, 50, 77, 28, 12, 78, 84, 67, 93, 53, 
-# 31, 36, 25, 73, 85, 75, 21, 13, 94, 0, 27, 16, 59, 66, 62, 58, 56, 43, 39, 34, 
-# 90, 92, 45, 88, 5, 15, 76, 49, 81, 2, 60, 57, 74, 14, 71, 33, 55, 54, 47, 61, 
-# 6, 17, 65, 63, 87, 70, 64, 69, 51, 40, 1, 48, 22, 19, 23, 35, 29, 11]
-
-
-# RobotArm @ 258 mults
-# [104, 93, 18, 9, 94, 79, 112, 13, 45, 89, 92, 17, 63, 76, 6, 66, 111, 96, 107, 
-# 34, 103, 60, 64, 19, 47, 91, 37, 24, 50, 97, 88, 100, 74, 108, 8, 51, 16, 110, 
-# 53, 55, 44, 5, 33, 56, 77, 90, 41, 57, 87, 31, 54, 95, 27, 46, 106, 21, 109, 
-# 59, 99, 102, 29, 72, 30, 20, 52, 68, 62, 28, 48, 10, 25, 105, 86, 58, 70, 1, 
-# 73, 83, 49, 14, 98, 32, 38, 80, 78, 7, 82, 42, 43, 4, 22, 85, 40, 36, 39, 2, 
-# 69, 12, 75, 15, 0, 71, 81, 3, 26, 35, 23, 11]
-
+NUM_MEASUREMENTS = 100
+DEVICE = jax.devices("cpu")[0] # Change this to create hardware-aware algorithm
+FUNCTION = RoeFlux_1d
 xs = [.01, .02, .02, .01, .03, .03]
-graph = make_graph(RoeFlux_1d, *xs) # make_graph(RobotArm_6DOF, *xs) # 
-# graph = embed(key, graph, [6, 114, 6])
-
-# a = jrand.uniform(key, (4,))
-# b = jrand.uniform(key, (2, 3))
-# c = jrand.uniform(key, (4, 4))
-# d = jrand.uniform(key, (4, 1))
-# xs = [a, b, c, d]
-# graph = make_graph(f, *xs)
-# graph = embed(key, graph, [6, 114, 6])
-
-# x = jnp.ones((4, 4))
-# y = jnp.ones((2, 4))
-
-# WQ1 = jnp.ones((4, 4))
-# WK1 = jnp.ones((4, 4))
-# WV1 = jnp.ones((4, 4))
-
-# WQ2 = jnp.ones((4, 4))
-# WK2 = jnp.ones((4, 4))
-# WV2 = jnp.ones((4, 4))
-
-# WQ3 = jnp.ones((4, 4))
-# WK3 = jnp.ones((4, 4))
-# WV3 = jnp.ones((4, 4))
-
-# W1 = jnp.ones((4, 4))
-# b1 = jnp.ones(4)
-
-# W2 = jnp.ones((2, 4))
-# b2 = jnp.ones((2, 1))
-
-# xs = (x, y, WQ1, WQ2, WQ3, WK1, WK2, WK3, WV1, WV2, WV3, W1, W2, b1, b2, 0., 1., 0., 1., 0., 1.)
-# graph = make_graph(EncoderDecoder, *xs)
-
-i = graph.at[0, 0, 0].get()
-v = graph.at[0, 0, 1].get() + graph.at[0, 0, 2].get()
-o = graph.at[0, 0, 2].get()
+xs = [jax.device_put(jnp.ones(1)*x, device=DEVICE) for x in xs]
+env = RuntimeGame(NUM_MEASUREMENTS, FUNCTION, *xs)
+i = env.graph.at[0, 0, 0].get()
+v = env.graph.at[0, 0, 1].get() + env.graph.at[0, 0, 2].get()
+o = env.graph.at[0, 0, 2].get()
 INFO = jnp.array([i, v, o])
 print("info", INFO)
 
-_, fwd_fmas = forward(graph)
-_, rev_fmas = reverse(graph)
-mM_order = minimal_markowitz(graph, int(graph.at[0, 0, 1].get()))
+
+_, fwd_fmas = forward(env.graph)
+_, rev_fmas = reverse(env.graph)
+mM_order = minimal_markowitz(env.graph, int(env.graph.at[0, 0, 1].get()))
 print("mM_order", [int(i) for i in mM_order])
-out, _ = cross_country(mM_order, graph)
+out, _ = cross_country(mM_order, env.graph)
 print("number of operations:", fwd_fmas, rev_fmas, out[1])
 
+act_seq = [i-1 for i in mM_order]
+cc_time = _get_reward(NUM_MEASUREMENTS, FUNCTION, *xs, act_seq=act_seq)
+fwd_time = _get_reward(NUM_MEASUREMENTS, FUNCTION, *xs, act_seq="fwd")
+rev_time = _get_reward(NUM_MEASUREMENTS, FUNCTION, *xs, act_seq="rev")
 
-ENTROPY_WEIGHT = 0.01
+
+FNAME = "Runtime_RobotArm_vertex_ppo.png"
+ENTROPY_WEIGHT = 0.
 VALUE_WEIGHT = 1.
 EPISODES = 1000
-BATCHSIZE = 32
-ROLLOUT_LENGTH = graph.shape[-1] - int(o)
+BATCHSIZE = 16
+ROLLOUT_LENGTH = env.graph.shape[-1] - int(o)
 GAE_LAMBDA = 0.95
-OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
-NUM_ACTIONS = graph.shape[-1]
+OBS_SHAPE = reduce(lambda x, y: x*y, env.graph.shape)
+NUM_ACTIONS = env.graph.shape[-1]
 EPS = 0.2 # clipping parameter for PPO
 MINIBATCHES = 4
 MINIBATCHSIZE = BATCHSIZE*ROLLOUT_LENGTH//MINIBATCHES
@@ -130,24 +78,6 @@ model = SequentialTransformerModel(INFO, 128, 3, 8,
 									policy_ff_dims=[1024, 512],
 									value_ff_dims=[1024, 512, 256], 
 									key=key)
-
-
-wandb.login(key="local-f6fac6ab04ebeaa9cc3f9d44207adbb1745fe4a2", 
-            host="https://wandb.fz-juelich.de")
-wandb.init(entity="lohoff", project="AlphaGrad")
-wandb.run.name = "RoeFlux_vertex_ppo"
-wandb.config = {"entropy_weight": ENTROPY_WEIGHT, 
-                "value_weight": VALUE_WEIGHT, 
-                "episodes": EPISODES, 
-                "batchsize": BATCHSIZE, 
-                "rollout_length": ROLLOUT_LENGTH, 
-                "gae_lambda": GAE_LAMBDA, 
-                "obs_shape": OBS_SHAPE, 
-                "num_actions": NUM_ACTIONS, 
-                "eps": EPS, 
-                "minibatches": MINIBATCHES, 
-                "minibatchsize": MINIBATCHSIZE, 
-                "fwd_fmas": fwd_fmas, "rev_fmas": rev_fmas, "out_fmas": out[1]}
 
 
 # Definition of some RL metrics for diagnostics
@@ -166,7 +96,7 @@ def get_log_probs_and_value(network, state, action, key):
     output = network(state, key=key)
     value = output[0]
     prob_dist = jnn.softmax(output[1:], axis=-1)
-    masked_prob_dist = prob_dist*mask / (jnp.sum(prob_dist*mask, axis=-1) + 1e-7)
+    masked_prob_dist = prob_dist*mask / (jnp.sum(prob_dist*mask, axis=-1, keepdims=True) + 1e-7)
 
     log_prob = jnp.log(prob_dist[action] + 1e-7)
     return log_prob, masked_prob_dist, value, entropy(masked_prob_dist)
@@ -188,7 +118,7 @@ def get_returns(trajectories):
         # The advantage estimate has to be done with the states and actions 
         # sampled from the old policy due to the importance sampling formulation
         # of PPO
-        done = 1. - done
+        done = 1.
         episodic_return = reward + discount*episodic_return*done
         return episodic_return, episodic_return
     
@@ -211,14 +141,14 @@ def get_advantages(trajectories):
         episodic_return, lastgaelam = carry
         reward = traj[0]
         done = traj[1]
-        value = symexp(traj[2])
-        next_value = symexp(traj[3])
+        value = traj[2]
+        next_value = traj[3]
         discount = traj[4]
         # Simplest advantage estimate
         # The advantage estimate has to be done with the states and actions 
         # sampled from the old policy due to the importance sampling formulation
         # of PPO
-        done = 1. - done
+        done = 1.
         episodic_return = reward + discount*episodic_return*done
         delta = reward + next_value*discount*done - value
         advantage = delta + discount*GAE_LAMBDA*lastgaelam*done
@@ -238,59 +168,98 @@ def shuffle_and_batch(trajectories, key):
     trajectories = jrand.permutation(key, trajectories, axis=0)
     return trajectories.reshape(MINIBATCHES, size, trajectories.shape[-1])
 
-
+@jax.jit
 def init_carry(keys):
-    graphs = jnp.tile(graph[jnp.newaxis, ...], (len(keys), 1, 1, 1))
-    return graphs
+    graphs = jnp.tile(env.graph[jnp.newaxis, ...], (len(keys), 1, 1, 1))
+    act_seqs = jnp.zeros((len(keys), env.num_actions), dtype=jnp.int32)
+    return (graphs, act_seqs)
+
+
+def scan(f, init, xs, length=None):
+    if xs is None:
+        xs = [None] * length
+    carry = init
+    ys = []
+    for x in tqdm(xs):
+        carry, y = f(carry, x)
+        ys.append(y)
+    return carry, jnp.stack(ys)
+
+
+# NOTE this is the bottleneck
+# this should be parallelized somehow...
+def env_steps(states, actions):
+    next_obs, next_act_seqs, rewards, dones = [], [], [], []
+    _states = [(states[0][i], states[1][i]) for i in range(BATCHSIZE)]
+    
+    out = [env.step(state, action) for state, action in zip(_states, actions)]
+    
+    next_obs = [o[0][0] for o in out]
+    next_act_seqs = [o[0][1] for o in out]
+    rewards = [o[1] for o in out]
+    dones = [o[2] for o in out]
+    next_states = (jnp.stack(next_obs), jnp.stack(next_act_seqs))
+    return next_states, jnp.array(rewards), jnp.array(dones)
+
+
+@eqx.filter_jit
+@partial(jax.vmap, in_axes=(None, 0, 0))
+def get_actions(network, obs, key):
+    net_key, act_key = jrand.split(key, 2)
+    output = eqx.filter_jit(network)(obs, key=net_key)
+    value = output[0]
+    prob_dist = jnn.softmax(output[1:], axis=-1)
+    
+    mask = 1. - obs.at[1, 0, :].get()
+    masked_prob_dist = prob_dist*mask / (jnp.sum(prob_dist*mask, axis=-1, keepdims=True) + 1e-7)
+    distribution = distrax.Categorical(probs=masked_prob_dist)
+    action = distribution.sample(seed=act_key)
+    return action, masked_prob_dist
 
 
 # Implementation of the RL algorithm
-@eqx.filter_jit
-@partial(jax.vmap, in_axes=(None, None, 0, 0))
+# @eqx.filter_jit
+# @partial(jax.vmap, in_axes=(None, None, 0, 0))
+# Painfully vmapped by hand
 def rollout_fn(network, rollout_length, init_carry, key):
     keys = jrand.split(key, rollout_length)
-    def step_fn(state, key):
-        net_key, next_net_key, act_key = jrand.split(key, 3)
+    def step_fn(states, key):
+        obs, act_seqs = states
+        next_net_key, key = jrand.split(key, 2)
+        keys = jrand.split(key, BATCHSIZE)
+        actions, masked_prob_dists = get_actions(network, obs, keys)
         
-        output = network(state, key=net_key)
-        value = output[0]
-        prob_dist = jnn.softmax(output[1:], axis=-1)
+        next_states, rewards, dones = env_steps(states, actions)
+        next_obs, next_act_seqs = next_states
+        discounts = 0.995*jnp.ones(BATCHSIZE) # TODO adjust this
         
-        mask = 1. - state.at[1, 0, :].get()
-        masked_prob_dist = prob_dist*mask / (jnp.sum(prob_dist*mask, axis=-1) + 1e-7)
+        next_net_keys = jrand.split(next_net_key, BATCHSIZE)
+        next_output = eqx.filter_jit(jax.vmap(network))(next_obs, key=next_net_keys)
+        next_values = next_output[:, 0]
+        next_prob_dists = next_output[:, 1:]
         
-        distribution = distrax.Categorical(probs=masked_prob_dist)
-        action = distribution.sample(seed=act_key)
-        
-        next_state, reward, done = step(state, action)
-        discount = 1.
-        next_output = network(next_state, key=next_net_key)
-        next_value = next_output[0]
-        next_prob_dist = next_output[1:]
-        
-        new_sample = jnp.concatenate((state.flatten(),
-                                    jnp.array([action]), 
-                                    jnp.array([reward]), 
-                                    jnp.array([done]),
-                                    next_state.flatten(), 
-                                    jnp.array([next_value]),
-                                    masked_prob_dist, 
-                                    jnp.array([discount]))) # (sars')
-        
-        return next_state, new_sample
+        new_sample = jnp.concatenate((obs.reshape(BATCHSIZE, -1),
+                                    actions[:, jnp.newaxis], 
+                                    rewards[:, jnp.newaxis], 
+                                    dones[:, jnp.newaxis],
+                                    next_obs.reshape(BATCHSIZE, -1), 
+                                    next_values[:, jnp.newaxis],
+                                    masked_prob_dists, 
+                                    discounts[:, jnp.newaxis]), axis=1) # (sars')
+        return next_states, new_sample
     
-    return lax.scan(step_fn, init_carry, keys)
+    return scan(step_fn, init_carry, keys)
 
 
 def loss(network, trajectories, keys):
     state = trajectories[:, :OBS_SHAPE]
-    state = state.reshape(-1, *graph.shape)
+    state = state.reshape(-1, *env.graph.shape)
     actions = trajectories[:, OBS_SHAPE]
     actions = jnp.int32(actions)
     
     rewards = trajectories[:, OBS_SHAPE+1]
     next_state = trajectories[:, OBS_SHAPE+3:2*OBS_SHAPE+3]
-    next_state = next_state.reshape(-1, *graph.shape)
+    next_state = next_state.reshape(-1, *env.graph.shape)
     
     old_prob_dist = trajectories[:, 2*OBS_SHAPE+4:2*OBS_SHAPE+NUM_ACTIONS+4]
     discounts = trajectories[:, 2*OBS_SHAPE+NUM_ACTIONS+4]
@@ -300,7 +269,7 @@ def loss(network, trajectories, keys):
     
     log_probs, prob_dist, values, entropies = get_log_probs_and_value(network, state, actions, keys)
     _, _, next_values, _ = get_log_probs_and_value(network, next_state, actions, keys)
-    norm_adv = (advantages - jnp.mean(advantages)) / (jnp.std(advantages) + 1e-7)
+    norm_adv = (advantages - jnp.mean(advantages))/(jnp.std(advantages) + 1e-7)
     
     # Losses
     old_log_probs = jax.vmap(lambda dist, a: jnp.log(dist[a] + 1e-7))(old_prob_dist, actions)
@@ -308,10 +277,10 @@ def loss(network, trajectories, keys):
     clipping_objective = jnp.minimum(ratio*norm_adv, jnp.clip(ratio, 1.-EPS, 1.+EPS)*norm_adv)
     ppo_loss = jnp.mean(-clipping_objective)
     entropy_loss = jnp.mean(entropies)
-    value_loss = .5*jnp.mean((symlog(returns) - values)**2)
+    value_loss = .5*jnp.mean((returns - values)**2)
     
     # Metrics
-    dV = episodic_returns - rewards - discounts*symexp(next_values) # assess fit quality
+    dV = episodic_returns - rewards - discounts*next_values # assess fit quality
     fit_quality = jnp.mean(jnp.abs(dV))
     explained_var = explained_variance(advantages, returns)
     kl_div = jnp.mean(optax.kl_divergence(jnp.log(prob_dist + 1e-7), old_prob_dist))
@@ -329,20 +298,20 @@ def train_agent(network, opt_state, trajectories, keys):
     return network, opt_state, metrics
 
 
-@eqx.filter_jit
+# @eqx.filter_jit
 def test_agent(network, rollout_length, keys):
     env_carry = init_carry(keys)
-    _, trajectories = rollout_fn(network, rollout_length, env_carry, keys)
-    returns = get_returns(trajectories)
-    best_return = jnp.max(returns[:, 0], axis=-1)
-    idx = jnp.argmax(returns[:, 0], axis=-1)
+    _, trajectories = rollout_fn(network, rollout_length, env_carry, keys[0])
+    trajectories = jnp.swapaxes(trajectories, 0, 1)
+    returns = jax.jit(get_returns)(trajectories)
+    best_return = jnp.max(returns[:, 1], axis=-1)
+    idx = jnp.argmax(returns[:, -1], axis=-1)
     best_act_seq = trajectories[idx, :, OBS_SHAPE]
     return best_return, best_act_seq
 
 
 model_key, key = jrand.split(key, 2)
 ortho_init = jnn.initializers.orthogonal(jnp.sqrt(2))
-
 
 def init_ortho_weight(model, init_fn, key):
     is_linear = lambda x: isinstance(x, eqx.nn.Linear)
@@ -366,28 +335,58 @@ model = init_ortho_weight(model, ortho_init, model_key)
 
 # Define optimizer
 # schedule = optax.linear_schedule(3e-4, 0., 4000)
-optim = optax.chain(optax.adam(2.5e-4), optax.clip_by_global_norm(.5))
+optim = optax.chain(optax.adam(5e-4), optax.clip_by_global_norm(.5))
 opt_state = optim.init(eqx.filter(model, eqx.is_inexact_array))
+
+# Tracking different RL metrics
+def plot_metrics(num_samples, ret, entropy_evo, value_fit_quality, expl_var, kl):
+    fig, axs = plt.subplots(2, 3)
+    fig.suptitle("Reinforcement learning metrics")
+    axs[0, 0].set_title("return")
+    axs[0, 0].plot(num_samples, ret)
+    axs[0, 0].axhline(y=rev_time, color = 'r', linestyle = '--') 
+    axs[0, 0].axhline(y=cc_time, color = 'g', linestyle = '--')
+    axs[0, 0].axhline(y=fwd_time, color = 'k', linestyle = '--')
+    
+    axs[0, 1].set_title("kl div")
+    axs[0, 1].plot(num_samples, kl)
+
+    axs[0, 2].set_title("mean entropy")
+    axs[0, 2].plot(num_samples, entropy_evo)
+
+    axs[1, 0].set_title("explained variance")
+    axs[1, 0].plot(num_samples, expl_var)
+    
+    axs[1, 1].set_title("value fit quality")
+    axs[1, 1].plot(num_samples, value_fit_quality)
+    
+    axs[1, 2].set_title("relative gain")
+    rel_gain = [(cc_time - ret[i])/cc_time for i in range(len(ret))]
+    axs[1, 2].plot(num_samples, rel_gain)
+        
+    fig.tight_layout()
+    plt.savefig(FNAME)
+    plt.close()
 
 
 # Training loop
 pbar = tqdm(range(EPISODES))
 ret, entropy_evo, value_fit_quality, expl_var, kl, nsamples = [], [], [], [], [], []
 test_key = jrand.PRNGKey(1234)
-test_keys = jrand.split(test_key, 8)
+test_keys = jrand.split(test_key, BATCHSIZE) # NOTE only 4 test envs
 samplecounts = 0
 
 env_keys = jrand.split(key, BATCHSIZE)
 env_carry = init_carry(env_keys)
-best_global_return = jnp.max(jnp.array([-fwd_fmas, -rev_fmas, -out[1]]))
+best_global_return = -100000.
 best_global_act_seq = None
 
 for episode in pbar:
     subkey, key = jrand.split(key, 2)
     keys = jrand.split(key, BATCHSIZE)  
-    env_carry = jax.jit(init_carry)(keys)
-    env_carry, trajectories = rollout_fn(model, ROLLOUT_LENGTH, env_carry, keys)
-
+    env_carry = init_carry(keys)
+    env_carry, trajectories = rollout_fn(model, ROLLOUT_LENGTH, env_carry, key)
+    trajectories = jnp.swapaxes(trajectories, 0, 1)
     trajectories = get_advantages(trajectories)
     batches = shuffle_and_batch(trajectories, subkey)
     
@@ -399,7 +398,7 @@ for episode in pbar:
         subkeys = jrand.split(key, MINIBATCHSIZE)
         model, opt_state, metrics = train_agent(model, opt_state, batches[i], subkeys)   
     samplecounts += BATCHSIZE*ROLLOUT_LENGTH
-    
+   
     kl_div, policy_entropy, fit_quality, explained_var = metrics
     best_return, best_act_seq = test_agent(model, ROLLOUT_LENGTH, test_keys)
     
@@ -407,19 +406,20 @@ for episode in pbar:
         best_global_return = best_return
         best_global_act_seq = best_act_seq
         print(f"New best return: {best_return}")
-        vertex_elimination_order = [int(i) for i in best_act_seq]
-        print(f"New best action sequence: {vertex_elimination_order}")
         
+        vertex_elimination_order = [int(i) for i in best_act_seq]
+        _, fmas = jax.jit(cross_country)(vertex_elimination_order, env.graph)
+        print(f"New best action sequence: {vertex_elimination_order} with {sum(fmas)} multiplications.")
     
-    # Tracking different RL metrics
-    wandb.log({"return": best_return,
-                "KL divergence": kl_div,
-                "entropy evolution": policy_entropy,
-                "explained variance": expl_var,
-                "value function fit quality": fit_quality,
-                "sample count": samplecounts})
+    nsamples.append(samplecounts)
+    kl.append(kl_div)
+    ret.append(best_return)
+    entropy_evo.append(policy_entropy)
+    expl_var.append(explained_var)
+    value_fit_quality.append(fit_quality)
         
     pbar.set_description(f"entropy: {policy_entropy:.4f}, returns: {best_return}, fit_quality: {fit_quality:.2f}, expl_var: {explained_var:.4}, kl_div: {kl_div:.4f}")
+    plot_metrics(nsamples, ret, entropy_evo, value_fit_quality, expl_var, kl)
         
 vertex_elimination_order = [int(i) for i in best_act_seq]
 print(f"Best vertex elimination sequence after {EPISODES} episodes is {vertex_elimination_order} with {best_global_return} multiplications.")

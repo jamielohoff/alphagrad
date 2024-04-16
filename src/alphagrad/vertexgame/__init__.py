@@ -1,6 +1,6 @@
 from .interpreter import make_graph
 from .transforms import safe_preeliminations, clean, compress, embed, minimal_markowitz
-from .core import forward, reverse, cross_country, vertex_eliminate
+from .core import forward, reverse, cross_country, vertex_eliminate, get_graph_shape
 from .vertex_game import step
 from .codegeneration.llm.llm_sampler import LLMSampler
 from .codegeneration.random.random_sampler import RandomSampler, RandomDerivativeSampler

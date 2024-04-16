@@ -20,9 +20,9 @@ import wandb
 from loguru import logger
 from tqdm import tqdm
 
-from .vertexgame import step, GraphDataset
+from ..vertexgame import step, GraphDataset
 
-from .utils import (A0_loss,
+from ..utils import (A0_loss,
                     get_masked_logits,
                     make_init_state,
                     postprocess_data,

@@ -6,8 +6,8 @@ import jax.random as jrand
 from graphax.examples import RoeFlux_1d
 
 from alphagrad.vertexgame import make_graph
-from alphagrad.sequential_transformer import SequentialTransformerModel
-from alphagrad.single_graph_experiment import SingleGraphExperiment, Paths
+from alphagrad.transformer.sequential_transformer import SequentialTransformerModel
+from alphagrad.alphazero.single_graph_experiment import SingleGraphExperiment, Paths
 
 # os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
 print("CPUs", jax.device_count("cpu"), jax.devices("cpu"))
