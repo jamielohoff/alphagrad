@@ -13,8 +13,6 @@ import jax.numpy as jnp
 import jax.random as jrand
 import jax.tree_util as jtu
 
-from jax.experimental.multihost_utils import global_array_to_host_local_array
-
 import flashbax as fbx
 import optax
 import equinox as eqx
@@ -82,9 +80,8 @@ LR = parameters["lr"]
 GUMBEL_SCALE = parameters["A0"]["gumbel_scale"]
 NUM_SIMULATIONS = parameters["A0"]["num_simulations"]
 NUM_CONSIDERED_ACTIONS = parameters["A0"]["num_considered_actions"]
-L2_WEIGHT = parameters["A0"]["l2_weight"] if args.L2 is None else args.L2
+L2_WEIGHT = parameters["l2_weight"] if args.L2 is None else args.L2
 REPLAY_BUFFER_SIZE = parameters["A0"]["replay_buffer_size"]
-LOOKBACK_HORIZON = parameters["A0"]["lookback_horizon"]
 QTRANSFORM_PARAMS = parameters["A0"]["qtransform"]
 
 ROLLOUT_LENGTH = int(graph_shape[1] - graph_shape[2])

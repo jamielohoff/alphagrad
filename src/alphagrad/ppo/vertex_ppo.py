@@ -127,7 +127,7 @@ OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
 NUM_ACTIONS = graph.shape[-1] # ROLLOUT_LENGTH # TODO fix this
 MINIBATCHSIZE = NUM_ENVS*ROLLOUT_LENGTH//MINIBATCHES
 
-model =PPOModel(graph_shape, 64, 2, 8,
+model = PPOModel(graph_shape, 64, 2, 8,
                 ff_dim=256,
                 num_layers_policy=1,
                 policy_ff_dims=[256, 256],

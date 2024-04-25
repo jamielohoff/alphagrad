@@ -101,28 +101,28 @@ class SequentialTransformer(eqx.Module):
         
         # Transpose inputs for equinox attention mechanism
         xs = self.pos_enc(xs).T
-        mask = mask.T
-        
+
         # Replicate mask and apply encoder
         if mask is not None:
+            mask = mask.T
             mask = jnp.tile(mask[jnp.newaxis, :, :], (self.num_heads, 1, 1))
             xs = self.encoder(xs, mask=mask, key=e_key)
-            policy_embedding = self.policy_enc(xs[1:], mask=mask[:, 1:, 1:], key=p_key)
+            policy_embedding = self.policy_enc(xs, mask=mask, key=p_key)
         else: 
             xs = self.encoder(xs, mask=None, key=e_key)
-            policy_embedding = self.policy_enc(xs[1:], mask=None, key=p_key)
+            policy_embedding = self.policy_enc(xs, mask=None, key=p_key)
         # global_token_xs = xs[0]
         values = jax.vmap(self.value_head)(xs)
         value = jnp.mean(values)
         
         policy = jax.vmap(self.policy_head)(policy_embedding)
-        return jnp.concatenate((value, policy.squeeze()))
+        return jnp.concatenate((jnp.array([value]), policy.squeeze()))
 
 
 class PPOModel(eqx.Module):
     embedding: eqx.nn.Conv2d
     projection: Array
-    output_token: Array
+    # output_token: Array
     transformer: SequentialTransformer
     
     def __init__(self, 
@@ -137,7 +137,7 @@ class PPOModel(eqx.Module):
         embed_key, token_key, proj_key, tf_key = jrand.split(key, 4)
         self.embedding = eqx.nn.Conv2d(num_vo, num_vo, (5, 1), stride=(1, 1), key=embed_key)
         self.projection = jrand.normal(proj_key, (num_i+num_vo, embedding_dim))
-        self.output_token = jrand.normal(token_key, (num_i+num_vo, 1))
+        # self.output_token = jrand.normal(token_key, (num_i+num_vo, 1))
         self.transformer = SequentialTransformer(embedding_dim,
                                                 num_vo, 
                                                 num_layers, 
@@ -150,8 +150,8 @@ class PPOModel(eqx.Module):
         vertex_mask = xs.at[1, 0, :].get() - output_mask
         attn_mask = jnp.logical_or(vertex_mask.reshape(1, -1), vertex_mask.reshape(-1, 1))
         
-        output_token_mask = jnp.where(xs.at[2, 0, :].get() > 0, self.output_token, 0.)
-        edges = xs.at[:, 1:, :].get() + output_token_mask[jnp.newaxis, :, :]
+        # output_token_mask = jnp.where(xs.at[2, 0, :].get() > 0, self.output_token, 0.)
+        edges = xs.at[:, 1:, :].get() # + output_token_mask[jnp.newaxis, :, :]
         edges = edges.astype(jnp.float32)
         
         embeddings = self.embedding(edges.transpose(2, 0, 1)).squeeze()

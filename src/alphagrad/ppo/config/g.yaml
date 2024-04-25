@@ -2,11 +2,10 @@ task: "g"
 
 hyperparameters:
   num_envs: 32
-  batchsize: 4096
-  episodes: 100
+  episodes: 5000
   entropy_weight: 0.01
   value_weight: 1.
-  ls: 0.0001
+  lr: 0.0001
 
   ppo:
     clip_param: 0.2

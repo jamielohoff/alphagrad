@@ -60,8 +60,8 @@ def make_recurrent_fn(network: PyTreeDef,
     return recurrent_fn
 
 
-def make_environment_interaction(num_considered_actions: int,
-                                num_actions: int,
+def make_environment_interaction(num_actions: int,
+                                num_considered_actions: int,
                                 gumbel_scale: int,
                                 num_simulations: int,
                                 recurrent_fn: Callable,

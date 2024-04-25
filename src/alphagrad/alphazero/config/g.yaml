@@ -1,15 +1,21 @@
-task: "RoeFlux_1d"
+task: "g"
 
 hyperparameters:
   num_envs: 16
+  batchsize: 4096
   episodes: 5000
   entropy_weight: 0.01
   value_weight: 1.
-  L2_weight: 0.0001
-  lr: 0.001
+  l2_weight: 0.0001
+  lr: 0.0001
 
   A0:
     gumbel_scale: 0.2
-    num_considered_actions: 1.
+    num_considered_actions: 5
     num_simulations: 25
+    replay_buffer_size: 100000
 
+    qtransform:
+      value_scale: 0.01
+      maxvisit_init: 25
+      rescale_values: False  
