@@ -1,0 +1,15 @@
+task: "RoeFlux_1d"
+
+hyperparameters:
+  num_envs: 16
+  episodes: 5000
+  entropy_weight: 0.01
+  value_weight: 1.
+  L2_weight: 0.0001
+  lr: 0.001
+
+  A0:
+    gumbel_scale: 0.2
+    num_considered_actions: 1.
+    num_simulations: 25
+

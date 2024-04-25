@@ -20,6 +20,16 @@ def symexp(x: Array) -> Array:
     return jnp.sign(x)*jnp.exp(jnp.abs(x)-1)  
 
 
+# Definition of some RL metrics for diagnostics
+def explained_variance(value, empirical_return):
+    return 1. - jnp.var(value)/jnp.var(empirical_return)
+
+
+# Function to calculate the entropy of a probability distribution
+def entropy(prob_dist):
+    return -jnp.sum(prob_dist*jnp.log(prob_dist + 1e-7), axis=-1)
+
+
 @ft.partial(jax.vmap, in_axes=(None, 0, 0, 0, None, None, None, 0))
 def A0_loss_fn(network, 
 				policy_target,
@@ -48,28 +58,37 @@ def A0_loss_fn(network,
 	"""
 	output = network(state, key=key)
 	policy_logits = output[1:]
-	value = output[0:1]
+	value = output[0]
 
+	policy_probs = jnn.softmax(policy_logits, axis=-1) # action_weights are a probability distribution!
 	policy_log_probs = jnn.log_softmax(policy_logits, axis=-1)
-	policy_loss = -jnp.dot(policy_log_probs, policy_target)
-	entropy_reg = -jnp.sum(policy_log_probs*jnp.exp(policy_log_probs))
+	# policy_loss = -jnp.dot(policy_log_probs, policy_target)
+	# entropy_reg = -jnp.sum(policy_log_probs*jnp.exp(policy_log_probs))
+	policy_loss = optax.softmax_cross_entropy(policy_logits, policy_target).sum() # -jnp.sum(policy_probs*(jnp.log(policy_target+1e-7) - policy_log_probs))
+	entropy = -jnp.sum(policy_probs*policy_log_probs)
  
 	# Added symlog for reward scaling
-	value_loss = optax.l2_loss(value, symlog(value_target))[0]
+	value_loss = optax.l2_loss(value, symlog(value_target[0]))
  
 	# Computing the L2 regularization
 	params = eqx.filter(network, eqx.is_array)
 	squared_sums = jtu.tree_map(lambda x: jnp.sum(jnp.square(x)), params)
-	L2_reg = jtu.tree_reduce(lambda x, y: x+y, squared_sums)
+	L2_loss = jtu.tree_reduce(lambda x, y: x+y, squared_sums)
  
-	loss = policy_loss + value_weight*value_loss 
-	loss += L2_weight*L2_reg 
-	loss += entropy_weight*entropy_reg
+	# Computing the explained variance
+	explained_var = explained_variance(value, value_target)
+ 
+	loss = policy_loss 
+	loss += value_weight*value_loss 
+	loss += L2_weight*L2_loss
+	# loss += entropy_weight*entropy_reg
 	aux = jnp.stack((policy_loss, 
-                	value_loss, 
-                 	L2_weight*L2_reg, 
-                  	entropy_reg))
+                	value_weight*value_loss, 
+                 	L2_weight*L2_loss, 
+					entropy,
+                   	explained_var))
 	return loss, aux
+
 
 
 def A0_loss(network, 
@@ -107,11 +126,8 @@ def postprocess_data(data: Array) -> Array:
 	Returns:
 		_type_: _description_
 	"""
-	idx = jnp.where(data[:, -2] > 0, 1., 0).sum() - 1
-	idx = idx.astype(jnp.int32)
-	final_rew = data.at[-1, -2].get()
-	data = data.at[:, -2].add(-final_rew)
-	return data.at[:, -2].multiply(-1.)
+	values = data[::-1, -2]
+	return data.at[:, -2].set(values)
 
 
 def make_init_state(edges, key):

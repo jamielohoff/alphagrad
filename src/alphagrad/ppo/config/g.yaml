@@ -1,7 +1,8 @@
-task: "RoeFlux_1d"
+task: "g"
 
 hyperparameters:
-  batchsize: 32
+  num_envs: 32
+  batchsize: 4096
   episodes: 100
   entropy_weight: 0.01
   value_weight: 1.
@@ -12,4 +13,5 @@ hyperparameters:
     gamma: 1.
     gae_lambda: 0.95
     num_minibatches: 4
+    rollout_length: 98
 

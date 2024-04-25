@@ -1,5 +1,7 @@
+import os
 import yaml
-from importlib import  import_module
+from importlib import import_module
+
 
 def load_config(path: str):
     with open(path) as file:
@@ -7,14 +9,8 @@ def load_config(path: str):
     return config
 
 
-def setup_experiment_config(task: str, name: str):
-    config = load_config("config.yaml")
-    experiment = config["experiments"][task][name]
-    return experiment
-
-
-def setup_experiment(task: str, name: str):
-    config = setup_experiment_config(task, name)
+def setup_experiment(task: str, path: str):
+    config = load_config(os.path.join(path, task, ".yaml"))
     
     # importing the make_function of the task and creating the graph from it
     package = "experiments"
@@ -23,6 +19,5 @@ def setup_experiment(task: str, name: str):
     module = import_module(package)
     make_fn = getattr(module, task_fn_name)
     graph, graph_shape, task_fn = make_fn()
-    print(task_fn_name, graph_shape)
     return config, graph, graph_shape, task_fn
     

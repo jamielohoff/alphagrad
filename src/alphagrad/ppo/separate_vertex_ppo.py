@@ -3,6 +3,7 @@ Implementation of PPO with insights from https://iclr-blog-track.github.io/2022/
 """
 
 import os
+import argparse
 from functools import partial, reduce
 
 import jax
@@ -11,99 +12,124 @@ import jax.lax as lax
 import jax.numpy as jnp
 import jax.random as jrand
 
+import numpy as np
+
 from tqdm import tqdm
 import wandb
 
 import distrax
-
 import optax
 import equinox as eqx
 
-from graphax.examples import RoeFlux_1d, RobotArm_6DOF, EncoderDecoder, ADALIF_SNN, f, g
-from alphagrad.transformer import Encoder
-from alphagrad.vertexgame import step, make_graph, forward, reverse, cross_country
-from alphagrad.vertexgame.transforms import minimal_markowitz, embed
+from alphagrad.config import setup_experiment
+from alphagrad.experiments import make_benchmark_scores
+from alphagrad.vertexgame import step
 from alphagrad.utils import symlog, symexp
-from alphagrad.transformer.sequential_transformer import PolicyNet, ValueNet
+from alphagrad.transformer.models import PolicyNet, ValueNet
 
-import matplotlib.pyplot as plt
+parser = argparse.ArgumentParser()
 
+parser.add_argument("--name", type=str, 
+                    default="Test", help="Name of the experiment.")
+
+parser.add_argument("--task", type=str,
+                    default="RoeFlux_1d", help="Name of the task to run.")
+
+parser.add_argument("--gpus", type=str, 
+                    default="0", help="GPU ID's to use for training.")
+
+parser.add_argument("--seed", type=int, 
+                    default="250197", help="Random seed.")
+
+parser.add_argument("--config_path", type=str, 
+                    default=os.path.join(os.getcwd(), "config"), 
+                    help="Path to the directory containing the configuration files.")
+
+args = parser.parse_args()
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ["CUDA_VISIBLE_DEVICES"] = str(1)
-key = jrand.PRNGKey(250197)
+os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpus)
+key = jrand.PRNGKey(args.seed)
 
+config, graph, graph_shape, task_fn = setup_experiment(args.task, args.config_path)
+mM_order, scores = make_benchmark_scores(graph)
 
-# RoeFlux @ 340 mults
-# [36, 24, 81, 75, 72, 59, 89, 57, 27, 52, 42, 10, 46, 91, 70, 44, 16, 99, 97, 43, 95, 4, 37, 8, 3, 66, 41, 7, 67, 38, 14, 1, 77, 58, 83, 26, 74, 78, 50, 49, 86, 15, 47, 73, 28, 64, 21, 31, 84, 0, 62, 18, 6, 94, 76, 87, 56, 13, 39, 34, 82, 90, 25, 88, 65, 33, 80, 79, 32, 30, 92, 68, 85, 20, 71, 55, 12, 54, 93, 61, 45, 9, 53, 60, 48, 69, 40, 51, 19, 2, 22, 5, 29, 23, 63, 11, 17, 35]
+parameters = config["hyperparameters"]
+ENTROPY_WEIGHT = parameters["entropy_weight"]
+VALUE_WEIGHT = parameters["value_weight"]
+EPISODES = parameters["episodes"]
+NUM_ENVS = parameters["num_envs"]
+LR = parameters["lr"]
 
-# RoeFlux @ 335 mults
-# [38, 46, 44, 20, 95, 24, 89, 72, 83, 86, 8, 7, 82, 42, 3, 79, 91, 30, 52, 26, 10, 4, 25, 18, 16, 80, 41, 28, 99, 9, 68, 50, 81, 71, 12, 75, 84, 67, 93, 53, 43, 36, 47, 73, 37, 33, 21, 32, 45, 97, 85, 31, 59, 94, 27, 58, 78, 6, 61, 34, 90, 92, 15, 88, 5, 62, 76, 49, 39, 2, 60, 56, 77, 14, 57, 55, 70, 54, 13, 74, 64, 17, 87, 63, 0, 65, 66, 69, 51, 40, 1, 48, 22, 19, 23, 35, 29, 11]
+GAE_LAMBDA = parameters["ppo"]["gae_lambda"]
+EPS = parameters["ppo"]["clip_param"]
+MINIBATCHES = parameters["ppo"]["num_minibatches"]
 
-# RoeFlux # 327 mults
-# [38, 46, 44, 20, 95, 24, 89, 72, 83, 86, 8, 7, 82, 42, 3, 79, 91, 30, 52, 26, 10, 4, 32, 18, 37, 80, 41, 97, 99, 9, 68, 50, 77, 28, 12, 78, 84, 67, 93, 53, 31, 36, 25, 73, 85, 75, 21, 13, 94, 0, 27, 16, 59, 66, 62, 58, 56, 43, 39, 34, 90, 92, 45, 88, 5, 15, 76, 49, 81, 2, 60, 57, 74, 14, 71, 33, 55, 54, 47, 61, 6, 17, 65, 63, 87, 70, 64, 69, 51, 40, 1, 48, 22, 19, 23, 35, 29, 11]
-
-
-# RobotArm @ 258 mults
-# [104, 93, 18, 9, 94, 79, 112, 13, 45, 89, 92, 17, 63, 76, 6, 66, 111, 96, 107, 34, 103, 60, 64, 19, 47, 91, 37, 24, 50, 97, 88, 100, 74, 108, 8, 51, 16, 110, 53, 55, 44, 5, 33, 56, 77, 90, 41, 57, 87, 31, 54, 95, 27, 46, 106, 21, 109, 59, 99, 102, 29, 72, 30, 20, 52, 68, 62, 28, 48, 10, 25, 105, 86, 58, 70, 1, 73, 83, 49, 14, 98, 32, 38, 80, 78, 7, 82, 42, 43, 4, 22, 85, 40, 36, 39, 2, 69, 12, 75, 15, 0, 71, 81, 3, 26, 35, 23, 11]
-
-xs = [.01, .02, .02, .01, .03, .03]
-graph = make_graph(RoeFlux_1d, *xs) # make_graph(RobotArm_6DOF, *xs) # 
-# graph = embed(key, graph, [6, 114, 6])
-
-
-i = graph.at[0, 0, 0].get()
-v = graph.at[0, 0, 1].get() + graph.at[0, 0, 2].get()
-o = graph.at[0, 0, 2].get()
-INFO = jnp.array([i, v, o])
-print("info", INFO)
-
-_, fwd_fmas = forward(graph)
-_, rev_fmas = reverse(graph)
-mM_order = minimal_markowitz(graph, int(graph.at[0, 0, 1].get()))
-print("mM_order", [int(i) for i in mM_order])
-out, _ = cross_country(mM_order, graph)
-print("number of operations:", fwd_fmas, rev_fmas, out[1])
-
-
-ENTROPY_WEIGHT = 0.01
-VALUE_WEIGHT = 1.
-EPISODES = 1000
-BATCHSIZE = 32
-ROLLOUT_LENGTH = graph.shape[-1] - int(o)
-GAE_LAMBDA = 0.95
+ROLLOUT_LENGTH = parameters["ppo"]["rollout_length"]
 OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
-NUM_ACTIONS = graph.shape[-1]
-EPS = 0.2 # clipping parameter for PPO
-MINIBATCHES = 4
-MINIBATCHSIZE = BATCHSIZE*ROLLOUT_LENGTH//MINIBATCHES
+NUM_ACTIONS = graph.shape[-1] # ROLLOUT_LENGTH # TODO fix this
+MINIBATCHSIZE = NUM_ENVS*ROLLOUT_LENGTH//MINIBATCHES
 
 policy_key, value_key = jrand.split(key, 2)
-policy_net = PolicyNet(INFO, 128, 4, 8, ff_dim=1024, mlp_dims=[1024, 512], key=policy_key)
-value_net = ValueNet(INFO, 128, 3, 8, ff_dim=1024, mlp_dims=[1024, 512, 256], key=value_key)
-    
+policy_net = PolicyNet(graph_shape, 64, 3, 6, ff_dim=256, mlp_dims=[256, 256], key=policy_key)
+value_net = ValueNet(graph_shape, 64, 2, 6, ff_dim=256, mlp_dims=[256, 128, 64], key=value_key)
+p_init_key, v_init_key = jrand.split(key, 2)
 
-# wandb.login(key="local-f6fac6ab04ebeaa9cc3f9d44207adbb1745fe4a2", 
-#             host="https://wandb.fz-juelich.de")
-# wandb.init(entity="lohoff", project="AlphaGrad")
-# wandb.run.name = "RoeFlux_vertex_ppo"
-# wandb.config = {"entropy_weight": ENTROPY_WEIGHT, 
-#                 "value_weight": VALUE_WEIGHT, 
-#                 "episodes": EPISODES, 
-#                 "batchsize": BATCHSIZE, 
-#                 "rollout_length": ROLLOUT_LENGTH, 
-#                 "gae_lambda": GAE_LAMBDA, 
-#                 "obs_shape": OBS_SHAPE, 
-#                 "num_actions": NUM_ACTIONS, 
-#                 "eps": EPS, 
-#                 "minibatches": MINIBATCHES, 
-#                 "minibatchsize": MINIBATCHSIZE, 
-#                 "fwd_fmas": fwd_fmas, "rev_fmas": rev_fmas, "out_fmas": out[1]}
+init_fn = jnn.initializers.orthogonal(jnp.sqrt(2))
+
+def init_weight(model, init_fn, key):
+    is_linear = lambda x: isinstance(x, eqx.nn.Linear)
+    get_weights = lambda m: [x.weight
+                            for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
+                            if is_linear(x)]
+    get_biases = lambda m: [x.bias
+                            for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
+                            if is_linear(x) and x.bias is not None]
+    weights = get_weights(model)
+    biases = get_biases(model)
+    new_weights = [init_fn(subkey, weight.shape)
+                    for weight, subkey in zip(weights, jax.random.split(key, len(weights)))]
+    new_biases = [jnp.zeros_like(bias) for bias in biases]
+    new_model = eqx.tree_at(get_weights, model, new_weights)
+    new_model = eqx.tree_at(get_biases, new_model, new_biases)
+    return new_model
+
+
+# Initialization could help with performance
+policy_net = init_weight(policy_net, init_fn, p_init_key)
+value_net = init_weight(value_net, init_fn, v_init_key)
+    
+    
+run_config = {"entropy_weight": ENTROPY_WEIGHT, 
+                "value_weight": VALUE_WEIGHT, 
+                "episodes": EPISODES, 
+                "batchsize": NUM_ENVS, 
+                "gae_lambda": GAE_LAMBDA, 
+                "eps": EPS, 
+                "minibatches": MINIBATCHES, 
+                "minibatchsize": MINIBATCHSIZE, 
+                "obs_shape": OBS_SHAPE, 
+                "num_actions": NUM_ACTIONS, 
+                "rollout_length": ROLLOUT_LENGTH, 
+                "fwd_fmas": scores[0], 
+                "rev_fmas": scores[1], 
+                "out_fmas": scores[2]}
+
+wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
+            host="https://wandb.fz-juelich.de")
+wandb.init(entity="ja-lohoff", project="AlphaGrad", group=args.task)
+wandb.run.name = "PPO_separate_networks_" + args.task + "_" + args.name
 
 
 # Definition of some RL metrics for diagnostics
 def explained_variance(advantage, empirical_return):
     return 1. - jnp.var(advantage)/jnp.var(empirical_return)
+
+
+def get_num_clipping_triggers(ratio):
+    _ratio = jnp.where(ratio <= 1.+EPS, ratio, 0.)
+    _ratio = jnp.where(ratio >= 1.-EPS, 1., 0.)
+    return jnp.sum(_ratio)
 
 
 # Function to calculate the entropy of a probability distribution
@@ -187,7 +213,7 @@ def get_advantages(trajectories):
     
 @jax.jit
 def shuffle_and_batch(trajectories, key):
-    size = BATCHSIZE*ROLLOUT_LENGTH//MINIBATCHES
+    size = NUM_ENVS*ROLLOUT_LENGTH//MINIBATCHES
     trajectories = trajectories.reshape(-1, trajectories.shape[-1])
     trajectories = jrand.permutation(key, trajectories, axis=0)
     return trajectories.reshape(MINIBATCHES, size, trajectories.shape[-1])
@@ -257,20 +283,26 @@ def loss(networks, trajectories, keys):
     # Losses
     old_log_probs = jax.vmap(lambda dist, a: jnp.log(dist[a] + 1e-7))(old_prob_dist, actions)
     ratio = jnp.exp(log_probs - old_log_probs)
+    
+    num_triggers = get_num_clipping_triggers(ratio)
+    trigger_ratio = num_triggers / len(ratio)
+    
     clipping_objective = jnp.minimum(ratio*norm_adv, jnp.clip(ratio, 1.-EPS, 1.+EPS)*norm_adv)
     ppo_loss = jnp.mean(-clipping_objective)
     entropy_loss = jnp.mean(entropies)
-    value_loss = .5*jnp.mean((symlog(returns) - values)**2)
+    value_loss = .5*jnp.mean((values - symlog(returns))**2)
     
     # Metrics
-    dV = episodic_returns - rewards - discounts*symexp(next_values) # assess fit quality
+    dV = returns - rewards - discounts*symexp(next_values) # assess fit quality
     fit_quality = jnp.mean(jnp.abs(dV))
     explained_var = explained_variance(advantages, returns)
     kl_div = jnp.mean(optax.kl_divergence(jnp.log(prob_dist + 1e-7), old_prob_dist))
     total_loss = ppo_loss
     total_loss += VALUE_WEIGHT*value_loss
     total_loss -= ENTROPY_WEIGHT*entropy_loss
-    return total_loss, [kl_div, entropy_loss, fit_quality, explained_var]
+    return total_loss, [kl_div, entropy_loss, fit_quality, explained_var,ppo_loss, 
+                        VALUE_WEIGHT*value_loss, ENTROPY_WEIGHT*entropy_loss, 
+                        total_loss, trigger_ratio]
     
 
 @eqx.filter_jit
@@ -282,63 +314,42 @@ def train_agent(networks, opt_state, trajectories, keys):
 
 
 @eqx.filter_jit
-def test_agent(networks, rollout_length, keys):
+def test_agent(network, rollout_length, keys):
     env_carry = init_carry(keys)
-    _, trajectories = rollout_fn(networks, rollout_length, env_carry, keys)
+    _, trajectories = rollout_fn(network, rollout_length, env_carry, keys)
     returns = get_returns(trajectories)
     best_return = jnp.max(returns[:, 0], axis=-1)
     idx = jnp.argmax(returns[:, 0], axis=-1)
     best_act_seq = trajectories[idx, :, OBS_SHAPE]
-    return best_return, best_act_seq
+    return best_return, best_act_seq, returns[:, 0]
 
 
 model_key, key = jrand.split(key, 2)
-ortho_init = jnn.initializers.orthogonal(jnp.sqrt(2))
-
-
-def init_ortho_weight(networks, init_fn, key):
-    is_linear = lambda x: isinstance(x, eqx.nn.Linear)
-    get_weights = lambda m: [x.weight
-                            for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
-                            if is_linear(x)]
-    get_biases = lambda m: [x.bias
-                            for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
-                            if is_linear(x) and x.bias is not None]
-    weights = get_weights(networks)
-    biases = get_biases(networks)
-    new_weights = [init_fn(subkey, weight.shape)
-                    for weight, subkey in zip(weights, jax.random.split(key, len(weights)))]
-    new_biases = [jnp.zeros_like(bias) for bias in biases]
-    new_networks = eqx.tree_at(get_weights, networks, new_weights)
-    new_networks = eqx.tree_at(get_biases, new_networks, new_biases)
-    return new_networks
-
 model = (policy_net, value_net)
 
-# Orthogonal initialization is supposed to help with PPO
-model = init_ortho_weight(model, ortho_init, model_key)
 
 # Define optimizer
-# schedule = optax.linear_schedule(3e-4, 0., 4000)
-optim = optax.chain(optax.adam(1e-3), optax.clip_by_global_norm(.5))
+schedule = LR # optax.linear_schedule(LR, 0., EPISODES)
+optim = optax.chain(optax.adam(schedule), optax.clip_by_global_norm(.5))
 opt_state = optim.init(eqx.filter(model, eqx.is_inexact_array))
 
 
 # Training loop
 pbar = tqdm(range(EPISODES))
-ret, entropy_evo, value_fit_quality, expl_var, kl, nsamples = [], [], [], [], [], []
-test_key = jrand.PRNGKey(1234)
+test_key, key = jrand.split(key, 2)
 test_keys = jrand.split(test_key, 8)
 samplecounts = 0
 
-env_keys = jrand.split(key, BATCHSIZE)
+env_keys = jrand.split(key, NUM_ENVS)
 env_carry = init_carry(env_keys)
-best_global_return = jnp.max(jnp.array([-fwd_fmas, -rev_fmas, -out[1]]))
+best_global_return = jnp.max(-jnp.array(scores))
 best_global_act_seq = None
+
+elim_order_table = wandb.Table(columns=["episode", "return", "elimination order"])
 
 for episode in pbar:
     subkey, key = jrand.split(key, 2)
-    keys = jrand.split(key, BATCHSIZE)  
+    keys = jrand.split(key, NUM_ENVS)  
     env_carry = jax.jit(init_carry)(keys)
     env_carry, trajectories = rollout_fn(model, ROLLOUT_LENGTH, env_carry, keys)
 
@@ -352,10 +363,12 @@ for episode in pbar:
     for i in range(MINIBATCHES):
         subkeys = jrand.split(key, MINIBATCHSIZE)
         model, opt_state, metrics = train_agent(model, opt_state, batches[i], subkeys)   
-    samplecounts += BATCHSIZE*ROLLOUT_LENGTH
+    samplecounts += NUM_ENVS*ROLLOUT_LENGTH
     
-    kl_div, policy_entropy, fit_quality, explained_var = metrics
-    best_return, best_act_seq = test_agent(model, ROLLOUT_LENGTH, test_keys)
+    kl_div, policy_entropy, fit_quality, explained_var, ppo_loss, value_loss, entropy_loss, total_loss, clipping_trigger_ratio = metrics
+    
+    test_keys = jrand.split(key, NUM_ENVS)
+    best_return, best_act_seq, returns = test_agent(model, 98, test_keys)
     
     if best_return > best_global_return:
         best_global_return = best_return
@@ -363,18 +376,24 @@ for episode in pbar:
         print(f"New best return: {best_return}")
         vertex_elimination_order = [int(i) for i in best_act_seq]
         print(f"New best action sequence: {vertex_elimination_order}")
-        
+        elim_order_table.add_data(episode, best_return, np.array(best_act_seq))
     
     # Tracking different RL metrics
-    # wandb.log({"return": best_return,
-    #             "KL divergence": kl_div,
-    #             "entropy evolution": policy_entropy,
-    #             "explained variance": expl_var,
-    #             "value function fit quality": fit_quality,
-    #             "sample count": samplecounts})
+    wandb.log({"best_return": best_return,
+               "mean_return": jnp.mean(returns),
+                "KL divergence": kl_div,
+                "entropy evolution": policy_entropy,
+                "value function fit quality": fit_quality,
+                "explained variance": explained_var,
+                "sample count": samplecounts,
+                "ppo loss": ppo_loss,
+                "value loss": value_loss,
+                "entropy loss": entropy_loss,
+                "total loss": total_loss,
+                "clipping trigger ratio": clipping_trigger_ratio})
         
-    pbar.set_description(f"entropy: {policy_entropy:.4f}, returns: {best_return}, fit_quality: {fit_quality:.2f}, expl_var: {explained_var:.4}, kl_div: {kl_div:.4f}")
+    pbar.set_description(f"entropy: {policy_entropy:.4f}, best_return: {best_return}, mean_return: {jnp.mean(returns)}, fit_quality: {fit_quality:.2f}, expl_var: {explained_var:.4}, kl_div: {kl_div:.4f}")
         
+wandb.log({"Elimination order": elim_order_table})
 vertex_elimination_order = [int(i) for i in best_act_seq]
 print(f"Best vertex elimination sequence after {EPISODES} episodes is {vertex_elimination_order} with {best_global_return} multiplications.")
-
