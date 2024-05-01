@@ -8,6 +8,9 @@ from graphax.examples import RoeFlux_1d, RoeFlux_3d, RobotArm_6DOF, f, g, Helmho
 # TODO add Hessian and ViT examples
 
 
+
+
+
 def make_benchmark_scores(graph):
     _, fwd_fmas = jax.jit(forward)(graph)
     _, rev_fmas = jax.jit(reverse)(graph)

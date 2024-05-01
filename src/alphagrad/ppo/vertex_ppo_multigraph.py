@@ -12,8 +12,6 @@ import jax.lax as lax
 import jax.numpy as jnp
 import jax.random as jrand
 
-import numpy as np
-
 from tqdm import tqdm
 import wandb
 
@@ -21,9 +19,9 @@ import distrax
 import optax
 import equinox as eqx
 
-from alphagrad.config import setup_experiment
+from alphagrad.config import setup_joint_experiment
 from alphagrad.experiments import make_benchmark_scores
-from alphagrad.vertexgame import step, embed, forward, reverse, cross_country, minimal_markowitz, make_graph
+from alphagrad.vertexgame import step, embed
 from alphagrad.utils import symlog, symexp, entropy, explained_variance
 from alphagrad.transformer.models import PolicyNet, ValueNet
 
@@ -34,45 +32,10 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str(0)
 key = jrand.PRNGKey(1337)
 
 
-xs = [.01, .02, .02, .01, .03, .03]
-graph = make_graph(RobotArm_6DOF, *xs) 
-other_graph = make_graph(RoeFlux_1d, *xs)
-
-print(graph.shape, other_graph.shape)
-
-
-i = graph.at[0, 0, 0].get()
-v = graph.at[0, 0, 1].get() + graph.at[0, 0, 2].get()
-o = graph.at[0, 0, 2].get()
-INFO = jnp.array([i, v, o])
-print(INFO)
-other_graph = embed(key, other_graph, INFO)
-
-_, fwd_fmas = forward(graph)
-_, rev_fmas = reverse(graph)
-mM_order = minimal_markowitz(graph, int(graph.at[0, 0, 1].get()))
-print("mM_order", [int(i) for i in mM_order])
-out, _ = cross_country(mM_order, graph)
-best_global_return = jnp.max(jnp.array([-fwd_fmas, -rev_fmas, -out[1]]))
-print(fwd_fmas, rev_fmas, out[1])
-
-
-_, fwd_fmas = forward(other_graph)
-_, rev_fmas = reverse(other_graph)
-mM_order = minimal_markowitz(other_graph, int(other_graph.at[0, 0, 1].get()))
-print("mM_order", [int(i) for i in mM_order])
-out, _ = cross_country(mM_order, other_graph)
-other_best_global_return = jnp.max(jnp.array([-fwd_fmas, -rev_fmas, -out[1]]))
-print(fwd_fmas, rev_fmas, out[1])
-
-
 parser = argparse.ArgumentParser()
 
 parser.add_argument("--name", type=str, 
                     default="Test", help="Name of the experiment.")
-
-parser.add_argument("--task", type=str,
-                    default="RoeFlux_1d", help="Name of the task to run.")
 
 parser.add_argument("--gpus", type=str, 
                     default="0", help="GPU ID's to use for training.")
@@ -84,16 +47,37 @@ parser.add_argument("--config_path", type=str,
                     default=os.path.join(os.getcwd(), "config"), 
                     help="Path to the directory containing the configuration files.")
 
+parser.add_argument("--wandb", type=str,
+                    default="run", help="Wandb mode.")
+
 args = parser.parse_args()
 
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpus)
 key = jrand.PRNGKey(args.seed)
 
-config, graph, graph_shape, task_fn = setup_experiment(args.task, args.config_path)
-mM_order, scores = make_benchmark_scores(graph)
 
-parameters = config["hyperparameters"]
+config, graphs, graph_shapes, task_fns = setup_joint_experiment(args.config_path)
+NAMES = config["tasks"]
+
+max_graph = max(graphs, key=lambda x: x.shape[-1])
+max_graph_shape = max(graph_shapes, key=lambda x: x[1])
+
+GRAPH_REPO = []
+orders_scores = {}
+for name, graph in zip(NAMES, graphs):
+    key, subkey = jrand.split(key, 2)
+    mM_order, scs = make_benchmark_scores(graph)
+    orders_scores[name] = {"order": mM_order, 
+                            "fwd_fmas":scs[0],
+                            "rev_fmas":scs[1],
+                            "mM_fmas":scs[2]}
+    _graph = embed(subkey, graph, max_graph_shape)
+    GRAPH_REPO.append(_graph)
+    
+GRAPH_REPO = jnp.stack(GRAPH_REPO, axis=0)
+
+parameters = config["hyperparameters"] 
 ENTROPY_WEIGHT = parameters["entropy_weight"]
 VALUE_WEIGHT = parameters["value_weight"]
 EPISODES = parameters["episodes"]
@@ -104,15 +88,17 @@ GAE_LAMBDA = parameters["ppo"]["gae_lambda"]
 EPS = parameters["ppo"]["clip_param"]
 MINIBATCHES = parameters["ppo"]["num_minibatches"]
 
-ROLLOUT_LENGTH = int(graph_shape[-2] - graph_shape[-1]) # parameters["ppo"]["rollout_length"]
-OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
-NUM_ACTIONS = graph.shape[-1] # ROLLOUT_LENGTH # TODO fix this
+ROLLOUT_LENGTH = int(max_graph_shape[-2] - max_graph_shape[-1]) # parameters["ppo"]["rollout_length"]
+print(f"Rollout length: {ROLLOUT_LENGTH}")
+OBS_SHAPE = reduce(lambda x, y: x*y, max_graph.shape)
+NUM_ACTIONS = max_graph.shape[-1] # ROLLOUT_LENGTH # TODO fix this
 MINIBATCHSIZE = NUM_ENVS*ROLLOUT_LENGTH//MINIBATCHES
+
 
 policy_key, value_key = jrand.split(key, 2)
 # Larger models seem to help
-policy_net = PolicyNet(graph_shape, 64, 4, 6, ff_dim=256, mlp_dims=[256, 256], key=policy_key)
-value_net = ValueNet(graph_shape, 64, 3, 6, ff_dim=256, mlp_dims=[256, 128, 64], key=value_key)
+policy_net = PolicyNet(max_graph_shape, 64, 5, 6, ff_dim=256, mlp_dims=[256, 256], key=policy_key)
+value_net = ValueNet(max_graph_shape, 64, 4, 6, ff_dim=256, mlp_dims=[256, 128, 64], key=value_key)
 p_init_key, v_init_key = jrand.split(key, 2)
 
 init_fn = jnn.initializers.orthogonal(jnp.sqrt(2))
@@ -153,15 +139,14 @@ run_config = {"seed": args.seed,
                 "obs_shape": OBS_SHAPE, 
                 "num_actions": NUM_ACTIONS, 
                 "rollout_length": ROLLOUT_LENGTH, 
-                "fwd_fmas": scores[0], 
-                "rev_fmas": scores[1], 
-                "out_fmas": scores[2]}
+                "scores": orders_scores}
 
 wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
             host="https://wandb.fz-juelich.de")
 wandb.init(entity="ja-lohoff", project="AlphaGrad", 
-            group=args.task, config=run_config)
-wandb.run.name = "PPO_separate_networks_" + args.task + "_" + args.name
+            group="joint", config=run_config,
+            mode=args.wandb)
+wandb.run.name = "PPO_separate_networks_" + "joint" + "_" + args.name
 
 
 # Value scaling functions
@@ -261,8 +246,13 @@ def shuffle_and_batch(trajectories, key):
 
 
 def init_carry(keys):
-    graphs = jnp.tile(graph[jnp.newaxis, ...], (len(keys), 1, 1, 1))
-    return graphs
+    graphs, sample_names = [], []
+    for key in keys:
+        idx = jrand.choice(key, len(GRAPH_REPO)).astype(jnp.int32)
+        graphs.append(GRAPH_REPO[idx])
+        sample_names.append(NAMES[idx])
+    graphs = jnp.stack(graphs, axis=0) # jnp.tile(graph[jnp.newaxis, ...], (len(keys), 1, 1, 1))
+    return graphs, sample_names
 
 
 # Implementation of the RL algorithm
@@ -352,15 +342,28 @@ def train_agent(networks, opt_state, trajectories, keys):
     return networks, opt_state, metrics
 
 
-@eqx.filter_jit
+# TODO needs proper implementation
 def test_agent(network, rollout_length, keys):
-    env_carry = init_carry(keys)
-    _, trajectories = rollout_fn(network, rollout_length, env_carry, keys)
+    env_carry, sample_names = init_carry(keys)
+    _, trajectories = eqx.filter_jit(rollout_fn)(network, rollout_length, env_carry, keys)
     returns = get_returns(trajectories)
-    best_return = jnp.max(returns[:, 0], axis=-1)
-    idx = jnp.argmax(returns[:, 0], axis=-1)
-    best_act_seq = trajectories[idx, :, OBS_SHAPE]
-    return best_return, best_act_seq, returns[:, 0]
+    names_returns = {name: [] for name in NAMES}
+    
+    for sn, ret in zip(sample_names, returns):
+        names_returns[sn].append(ret)
+        
+    best_returns = {name:{} for name in NAMES}
+    for name in NAMES:
+        _returns = jnp.stack(names_returns[name])
+        best_return = jnp.max(_returns[:, 0], axis=-1)
+        idx = jnp.argmax(_returns[:, 0], axis=-1)
+        # best_act_seq = trajectories[idx, :, OBS_SHAPE]
+        best_returns[name]["best_return"] = best_return
+        best_returns[name]["returns"] = jnp.mean(_returns[:, 0], axis=0)
+        best_returns[name]["idx"] = idx
+        best_returns[name]["act_seq"] = None # best_act_seq
+        
+    return best_returns
 
 
 model_key, key = jrand.split(key, 2)
@@ -382,16 +385,22 @@ test_keys = jrand.split(test_key, 8)
 samplecounts = 0
 
 env_keys = jrand.split(key, NUM_ENVS)
-env_carry = init_carry(env_keys)
-best_global_return = jnp.max(-jnp.array(scores))
-best_global_act_seq = None
+env_carry, _ = init_carry(env_keys)
+
+best_global_metric = {name: {} for name in NAMES}
+for name in NAMES:
+    scores = orders_scores[name]
+    fwd, rev, mM = scores["fwd_fmas"], scores["rev_fmas"], scores["mM_fmas"]
+    _best_glob_ret = jnp.max(-jnp.array([fwd, rev, mM]))
+    best_global_metric[name]["best_return"] = _best_glob_ret
+    best_global_metric[name]["act_seq"] = None
 
 elim_order_table = wandb.Table(columns=["episode", "return", "elimination order"])
 
 for episode in pbar:
     subkey, key = jrand.split(key, 2)
     keys = jrand.split(key, NUM_ENVS)  
-    env_carry = jax.jit(init_carry)(keys)
+    env_carry, _ = init_carry(keys)
     env_carry, trajectories = rollout_fn(model, ROLLOUT_LENGTH, env_carry, keys)
 
     trajectories = get_advantages(trajectories)
@@ -409,19 +418,26 @@ for episode in pbar:
     kl_div, policy_entropy, fit_quality, explained_var, ppo_loss, value_loss, entropy_loss, total_loss, clipping_trigger_ratio = metrics
     
     test_keys = jrand.split(key, NUM_ENVS)
-    best_return, best_act_seq, returns = test_agent(model, ROLLOUT_LENGTH, test_keys)
+    best_returns = test_agent(model, ROLLOUT_LENGTH, test_keys)
     
-    if best_return > best_global_return:
-        best_global_return = best_return
-        best_global_act_seq = best_act_seq
-        print(f"New best return: {best_return}")
-        vertex_elimination_order = [int(i) for i in best_act_seq]
-        print(f"New best action sequence: {vertex_elimination_order}")
-        elim_order_table.add_data(episode, best_return, np.array(best_act_seq))
-    
+    for name in NAMES:
+        # print(best_returns[name]["best_return"], best_global_metric[name]["best_return"])
+        if best_returns[name]["best_return"] > best_global_metric[name]["best_return"]:
+            best_global_metric[name]["best_return"] = best_returns[name]["best_return"]
+            best_global_metric[name]["act_seq"] = best_returns[name]["act_seq"]
+            
+            _best_new_ret = best_returns[name]["best_return"]
+            _best_new_act_seq = best_returns[name]["act_seq"]
+            
+            print(f"New best return for {name}: {_best_new_ret}")
+            print(f"New best action sequence for {name}: {_best_new_act_seq}")
+            # elim_order_table.add_data(episode, best_returns[name]["best_return"], best_returns[name]["act_seq"])
+            
+    _best_ret = {"best_return_" + name: int(best_returns[name]["best_return"]) for name in NAMES}
+    _mean_ret = {"mean_return_" + name: float(jnp.mean(best_returns[name]["returns"])) for name in NAMES}
     # Tracking different RL metrics
-    wandb.log({"best_return": best_return,
-               "mean_return": jnp.mean(returns),
+    wandb.log({**_best_ret,
+               **_mean_ret,
                 "KL divergence": kl_div,
                 "entropy evolution": policy_entropy,
                 "value function fit quality": fit_quality,
@@ -433,9 +449,13 @@ for episode in pbar:
                 "total loss": total_loss,
                 "clipping trigger ratio": clipping_trigger_ratio})
         
-    pbar.set_description(f"entropy: {policy_entropy:.4f}, best_return: {best_return}, mean_return: {jnp.mean(returns)}, fit_quality: {fit_quality:.2f}, expl_var: {explained_var:.4f}, kl_div: {kl_div:.4f}")
+    pbar.set_description(f"entropy: {policy_entropy:.4f}, " \
+                        f"{_best_ret}, " \
+                        f"{_mean_ret}, " \
+                        f"fit_quality: {fit_quality:.2f}, " \
+                        f"expl_var: {explained_var:.4f}, kl_div: {kl_div:.4f}")
         
-wandb.log({"Elimination order": elim_order_table})
-vertex_elimination_order = [int(i) for i in best_act_seq]
-print(f"Best vertex elimination sequence after {EPISODES} episodes is {vertex_elimination_order} with {best_global_return} multiplications.")
+# wandb.log({"Elimination order": elim_order_table})
+# vertex_elimination_order = [int(i) for i in best_act_seq]
+# print(f"Best vertex elimination sequence after {EPISODES} episodes is {vertex_elimination_order} with {best_global_return} multiplications.")
 

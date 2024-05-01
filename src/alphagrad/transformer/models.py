@@ -114,7 +114,7 @@ class SequentialTransformer(eqx.Module):
             policy_embedding = xs # self.policy_enc(xs, mask=None, key=p_key)
         # global_token_xs = xs[0]
         values = jax.vmap(self.value_head)(xs)
-        value = jnp.sum(values) # jnp.mean(values)
+        value = jnp.mean(values)
         
         policy = jax.vmap(self.policy_head)(xs)
         return jnp.concatenate((jnp.array([value]), policy.squeeze()))

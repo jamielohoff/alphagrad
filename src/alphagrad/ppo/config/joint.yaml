@@ -1,7 +1,7 @@
 tasks: ["RoeFlux_1d", "RobotArm_6DOF", "g"]
 
 hyperparameters:
-  num_envs: 32
+  num_envs: 24
   episodes: 1500 # 5000
   entropy_weight: 0.01
   value_weight: 1.

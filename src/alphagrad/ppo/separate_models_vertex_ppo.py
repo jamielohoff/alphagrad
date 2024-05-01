@@ -78,6 +78,9 @@ parser.add_argument("--config_path", type=str,
                     default=os.path.join(os.getcwd(), "config"), 
                     help="Path to the directory containing the configuration files.")
 
+parser.add_argument("--wandb", type=str,
+                    default="run", help="Wandb mode.")
+
 args = parser.parse_args()
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -154,7 +157,8 @@ run_config = {"seed": args.seed,
 wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
             host="https://wandb.fz-juelich.de")
 wandb.init(entity="ja-lohoff", project="AlphaGrad", 
-            group=args.task, config=run_config)
+            group=args.task, config=run_config,
+            mode=args.wandb)
 wandb.run.name = "PPO_separate_networks_" + args.task + "_" + args.name
 
 # Value scaling functions

@@ -43,19 +43,20 @@ from ..core import get_shape
 #     return edges
 
 
-def embed(key: PRNGKey, edges: Array, new_size: Sequence[int]) -> Array:
+def embed(key: PRNGKey, edges: Array, new_shape: Sequence[int]) -> Array:
     """
     Embeds a smaller graph into a larger graph frame based on random inserts
     NOTE: Changes size of the tensor!
     """
     num_i, num_vo = get_shape(edges)
-    new_num_i, new_num_vo, new_num_o = new_size
-
+    new_num_i, new_num_vo, new_num_o = new_shape
+    
     i_diff = new_num_i - num_i
     vo_diff = new_num_vo - num_vo
+    if i_diff <= 0 or vo_diff <= 0:
+        return edges
     
     le, re = jnp.split(edges, (num_i+1,), axis=1)
-    print(le.shape, re.shape)
     edges = jnp.concatenate([le, jnp.zeros((5, i_diff, num_vo), dtype=jnp.int32), re], axis=1)
         
     edges = jnp.pad(edges, ((0, 0), (0, vo_diff), (0, vo_diff)), mode='constant', constant_values=0)
