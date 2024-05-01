@@ -17,7 +17,9 @@ from ..utils import symexp
 # Preconfigured functions for tree search
 select_params = lambda x, y: y if eqx.is_inexact_array(x) else x
 
-def make_recurrent_fn(network: PyTreeDef,
+def make_recurrent_fn(value_transform: Callable,
+                    inverse_value_transform: Callable,
+                    network: PyTreeDef,
                     step: Callable,
                     get_masked_logits: Callable) -> Callable:
     """TODO write docstring
@@ -32,17 +34,20 @@ def make_recurrent_fn(network: PyTreeDef,
         Callable: _description_
     """
     @partial(jax.vmap, in_axes=(None, None, 0, 0))
-    def recurrent_fn(params, rng_key, actions, state):
+    def recurrent_fn(params, rng_key, actions, states):
+        state = states[-5:]
         next_state, reward, _ = step(state, actions) # Env dynamics function
+        states = jnp.roll(states, shift=-5, axis=1)
+        next_states = states.at[-5:].set(next_state)
         
         # Map parameters to prediction function, i.e. neural network
         model = jtu.tree_map(select_params, network, params)
 
         # Compute policy and value for leaf node with neural network model
         # Symexp for reward scaling since value head is trained on symlog(value)
-        output = model(next_state, rng_key)
+        output = model(next_states, rng_key)
         policy_logits = output[1:]
-        value = symexp(output[0]) 
+        value = inverse_value_transform(output[0])
         
         # Create mask for invalid actions, i.e. already eliminated vertices
         masked_logits = get_masked_logits(policy_logits, state)
@@ -55,12 +60,14 @@ def make_recurrent_fn(network: PyTreeDef,
                                                     discount=1.,
                                                     prior_logits=masked_logits,
                                                     value=value)
-        return recurrent_fn_output, next_state
+        return recurrent_fn_output, next_states
     
     return recurrent_fn
 
 
-def make_environment_interaction(num_actions: int,
+def make_environment_interaction(value_transform: Callable,
+                                inverse_value_transform: Callable,
+                                num_actions: int,
                                 num_considered_actions: int,
                                 gumbel_scale: int,
                                 num_simulations: int,
@@ -78,23 +85,23 @@ def make_environment_interaction(num_actions: int,
         params = eqx.filter(network, eqx.is_inexact_array)
         
         def loop_fn(carry, _):
-            state, rews, key = carry
+            states, num_muls, key = carry
             key, subkey = jrand.split(key, 2)
-    
+            state = states[:, -5:] 
+            
             # Create action mask
             mask = state.at[:, 1, 0, :].get()
 
             # Getting policy and value estimates
-            # Symexp for reward scaling since value head is trained on symlog(value)
             keys = jrand.split(key, batchsize)
-            output = batched_network(state, keys)
+            output = batched_network(states, keys)
             policy_logits = output[:, 1:]
-            values = symexp(output[:, 0]) 
+            value = inverse_value_transform(output[:, 0])
 
             # Configuring root node of the tree search
             root = mctx.RootFnOutput(prior_logits=policy_logits, 
-                                    value=values, 
-                                    embedding=state)
+                                    value=value, 
+                                    embedding=states)
                                     
             # Gumbel MuZero is so much better!
             # Smaller Gumbel noise helps improve performance, but too small kills learning
@@ -110,24 +117,37 @@ def make_environment_interaction(num_actions: int,
 
             # Tree search derived targets for policy and value function
             search_policy = policy_output.action_weights
+            # jax.debug.print("search_policy={search_policy}", search_policy=search_policy[0])
+            # search_value = policy_output.search_tree.qvalues(jnp.full(batchsize, policy_output.search_tree.ROOT_INDEX))[jnp.arange(batchsize), policy_output.action]
+            search_value = policy_output.search_tree.node_values[:, policy_output.search_tree.ROOT_INDEX]
+            jax.debug.print("search_value={search_value}", search_value=search_value)
             
-            # Always take action recommended by tree search
+            # Always take action recommended by tree search because for this
+            # action, the gumbel method guarantees a policy improvement
             action = policy_output.action
 
             # Step the environment
             next_state, rewards, done = jax.vmap(step)(state, action)
-            rews += rewards	
+            states = jnp.roll(states, shift=-5, axis=1)
+            next_states = states.at[:, -5:].set(next_state)
+            
+            # Compute the number of multiplications
+            num_muls += rewards
             
             # Package up everything for further processing
             state_flattened = state.reshape(batchsize, -1)
-            return (next_state, rews, key), jnp.concatenate([state_flattened,
-                                                            search_policy, 
-                                                            rews[:, jnp.newaxis], 
-                                                            done[:, jnp.newaxis]], 
-                                                            axis=1)
+            return (next_states, num_muls, key), jnp.concatenate([state_flattened,
+                                                                search_policy, 
+                                                                rewards[:, jnp.newaxis], 
+                                                                value[:, jnp.newaxis],
+                                                                # search_value[:, jnp.newaxis],
+                                                                done[:, jnp.newaxis]], 
+                                                                axis=1)
 
-        _, output = lax.scan(loop_fn, init_carry, None, length=num_actions)
-        return output.transpose(1, 0, 2)
+        perf, output = lax.scan(loop_fn, init_carry, None, length=num_actions)
+        final_state = perf[0][:, -5:]
+        num_muls = perf[1]
+        return final_state, num_muls, output.transpose(1, 0, 2)
     
     return environment_interaction
 

@@ -24,7 +24,7 @@ import equinox as eqx
 from alphagrad.config import setup_experiment
 from alphagrad.experiments import make_benchmark_scores
 from alphagrad.vertexgame import step
-from alphagrad.utils import symlog, symexp
+from alphagrad.utils import symlog, symexp, entropy, explained_variance
 from alphagrad.transformer.models import PPOModel
 
 
@@ -127,9 +127,9 @@ OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
 NUM_ACTIONS = graph.shape[-1] # ROLLOUT_LENGTH # TODO fix this
 MINIBATCHSIZE = NUM_ENVS*ROLLOUT_LENGTH//MINIBATCHES
 
-model = PPOModel(graph_shape, 64, 2, 8,
+model = PPOModel(graph_shape, 64, 6, 8,
                 ff_dim=256,
-                num_layers_policy=1,
+                num_layers_policy=2,
                 policy_ff_dims=[256, 256],
                 value_ff_dims=[256, 128, 64], 
                 key=key)
@@ -158,8 +158,10 @@ def init_weight(model, init_fn, key):
 model = init_weight(model, init_fn, init_key)
 
 
-run_config = {"entropy_weight": ENTROPY_WEIGHT, 
+run_config = {"seed": args.seed,
+                "entropy_weight": ENTROPY_WEIGHT, 
                 "value_weight": VALUE_WEIGHT, 
+                "lr": LR,
                 "episodes": EPISODES, 
                 "num_envs": NUM_ENVS, 
                 "gae_lambda": GAE_LAMBDA, 
@@ -190,19 +192,10 @@ def inverse_reward_normalization_fn(reward):
 
 
 # Definition of some RL metrics for diagnostics
-def explained_variance(advantage, empirical_return):
-    return 1. - jnp.var(advantage)/jnp.var(empirical_return)
-
-
 def get_num_clipping_triggers(ratio):
     _ratio = jnp.where(ratio <= 1.+EPS, ratio, 0.)
     _ratio = jnp.where(ratio >= 1.-EPS, 1., 0.)
     return jnp.sum(_ratio)
-
-
-# Function to calculate the entropy of a probability distribution
-def entropy(prob_dist):
-    return -jnp.sum(prob_dist*jnp.log(prob_dist + 1e-7), axis=-1)
 
 
 @partial(jax.vmap, in_axes=(None, 0, 0, 0))
@@ -210,11 +203,11 @@ def get_log_probs_and_value(network, state, action, key):
     mask = 1. - state.at[1, 0, :].get()
     output = network(state, key=key)
     value = output[0]
-    prob_dist = jnn.softmax(output[1:], axis=-1)
-    masked_prob_dist = prob_dist*mask / (jnp.sum(prob_dist*mask, axis=-1) + 1e-7)
+    logits = output[1:]
+    prob_dist = jnn.softmax(logits, axis=-1, where=mask, initial=mask.max())
 
     log_prob = jnp.log(prob_dist[action] + 1e-7)
-    return log_prob, masked_prob_dist, value, entropy(masked_prob_dist)
+    return log_prob, prob_dist, value, entropy(prob_dist)
 
 
 @jax.jit
@@ -297,22 +290,21 @@ def rollout_fn(network, rollout_length, init_carry, key):
     keys = jrand.split(key, rollout_length)
     def step_fn(state, key):
         net_key, next_net_key, act_key = jrand.split(key, 3)
+        mask = 1. - state.at[1, 0, :].get()
         
         output = network(state, key=net_key)
         value = output[0]
-        prob_dist = jnn.softmax(output[1:], axis=-1)
-        
-        mask = 1. - state.at[1, 0, :].get()
-        masked_prob_dist = prob_dist*mask / (jnp.sum(prob_dist*mask, axis=-1) + 1e-7)
-        
-        distribution = distrax.Categorical(probs=masked_prob_dist)
+        logits = output[1:]
+        prob_dist = jnn.softmax(logits, axis=-1, where=mask, initial=mask.max())
+                
+        distribution = distrax.Categorical(probs=prob_dist)
         action = distribution.sample(seed=act_key)
         
         next_state, reward, done = step(state, action)
         discount = 1.
         next_output = network(next_state, key=next_net_key)
         next_value = next_output[0]
-        next_prob_dist = next_output[1:]
+        next_logits = next_output[1:]
         
         new_sample = jnp.concatenate((state.flatten(),
                                     jnp.array([action]), 
@@ -320,7 +312,7 @@ def rollout_fn(network, rollout_length, init_carry, key):
                                     jnp.array([done]),
                                     next_state.flatten(), 
                                     jnp.array([next_value]),
-                                    masked_prob_dist, 
+                                    prob_dist, 
                                     jnp.array([discount]))) # (sars')
          
         return next_state, new_sample
@@ -393,8 +385,9 @@ def test_agent(network, rollout_length, keys):
 
 
 # Define optimizer
-schedule = LR # optax.linear_schedule(LR, 0, EPISODES)
-optim = optax.chain(optax.adam(schedule, b1=.9, eps=1e-7), optax.clip_by_global_norm(.5))
+schedule = optax.cosine_decay_schedule(LR, EPISODES, 0.) # Works better with scheduler
+optim = optax.chain(optax.adam(schedule, b1=.9, eps=1e-7), 
+                    optax.clip_by_global_norm(.5))
 opt_state = optim.init(eqx.filter(model, eqx.is_inexact_array))
 
 

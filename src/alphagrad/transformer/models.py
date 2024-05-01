@@ -91,6 +91,7 @@ class SequentialTransformer(eqx.Module):
         self.policy_head = MLP(in_dim, 1, policy_ff_dims, key=p_key)
         self.value_head = MLP(in_dim, 1, value_ff_dims, key=v_key)
         
+        
     def __call__(self, xs: Array, mask: Array = None, key: PRNGKey = None) -> Array:
         e_key, p_key = jrand.split(key, 2)
             
@@ -107,15 +108,15 @@ class SequentialTransformer(eqx.Module):
             mask = mask.T
             mask = jnp.tile(mask[jnp.newaxis, :, :], (self.num_heads, 1, 1))
             xs = self.encoder(xs, mask=mask, key=e_key)
-            policy_embedding = self.policy_enc(xs, mask=mask, key=p_key)
+            policy_embedding = xs # self.policy_enc(xs, mask=mask, key=p_key)
         else: 
             xs = self.encoder(xs, mask=None, key=e_key)
-            policy_embedding = self.policy_enc(xs, mask=None, key=p_key)
+            policy_embedding = xs # self.policy_enc(xs, mask=None, key=p_key)
         # global_token_xs = xs[0]
         values = jax.vmap(self.value_head)(xs)
-        value = jnp.mean(values)
+        value = jnp.sum(values) # jnp.mean(values)
         
-        policy = jax.vmap(self.policy_head)(policy_embedding)
+        policy = jax.vmap(self.policy_head)(xs)
         return jnp.concatenate((jnp.array([value]), policy.squeeze()))
 
 
@@ -175,9 +176,10 @@ class AlphaZeroModel(eqx.Module):
         super().__init__()
         num_i, num_vo, num_o = graph_shape
         embed_key, token_key, proj_key, tf_key = jrand.split(key, 4)
-        k, s = 5, 2
-        self.embedding = eqx.nn.Conv2d(num_vo, num_vo, (5, k), stride=(1, s), key=embed_key)
-        conv_size = (num_i+num_vo-k+1) // s + 1
+        kernel_size, stride = 3, 2
+        self.embedding = eqx.nn.Conv2d(num_vo, num_vo, (5, kernel_size), 
+                                        stride=(1, stride), key=embed_key)
+        conv_size = (num_i+num_vo-kernel_size) // stride+1
         self.projection = jrand.normal(proj_key, (conv_size, embedding_dim))
         # self.output_token = jrand.normal(token_key, (num_i+num_vo, 1))
         self.transformer = SequentialTransformer(embedding_dim,
@@ -304,4 +306,7 @@ class ValueNet(eqx.Module):
         values = jax.vmap(self.head)(xs)
         
         return jnp.mean(values)
+    
+    
+# TODO test ResNet
 

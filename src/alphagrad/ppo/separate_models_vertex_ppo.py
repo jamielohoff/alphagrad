@@ -24,8 +24,41 @@ import equinox as eqx
 from alphagrad.config import setup_experiment
 from alphagrad.experiments import make_benchmark_scores
 from alphagrad.vertexgame import step
-from alphagrad.utils import symlog, symexp
+from alphagrad.utils import symlog, symexp, entropy, explained_variance
 from alphagrad.transformer.models import PolicyNet, ValueNet
+
+# 324 RoeFlux_1d
+# [68, 16, 24, 76, 63, 32, 70, 61, 80, 38, 52, 99, 43, 30, 83, 34, 74, 86, 62, 
+# 8, 67, 4, 37, 50, 3, 44, 33, 15, 7, 42, 26, 28, 41, 10, 97, 21, 13, 88, 59, 
+# 47, 49, 84, 95, 64, 36, 72, 27, 93, 25, 94, 78, 75, 90, 89, 81, 0, 20, 65, 77, 
+# 31, 66, 46, 14, 12, 18, 71, 9, 87, 6, 45, 85, 91, 79, 57, 53, 17, 73, 51, 69, 
+# 5, 54, 60, 92, 56, 58, 1, 39, 55, 82, 40, 2, 48, 22, 19, 35, 23, 11, 29]
+
+# 247 RobotArm_6DOF
+# [5, 94, 9, 20, 8, 13, 96, 66, 6, 93, 76, 104, 103, 95, 102, 21, 106, 17, 18, 
+# 81, 112, 77, 78, 63, 64, 52, 79, 98, 51, 62, 111, 69, 37, 89, 19, 22, 26, 4, 
+# 110, 39, 1, 100, 25, 54, 80, 107, 34, 53, 90, 105, 70, 74, 36, 43, 28, 42, 45, 
+# 44, 38, 40, 75, 29, 68, 55, 60, 10, 87, 86, 7, 32, 48, 72, 109, 83, 50, 35, 
+# 85, 59, 99, 24, 97, 73, 33, 49, 57, 58, 31, 16, 108, 30, 41, 82, 92, 27, 91, 
+# 47, 46, 0, 12, 56, 71, 14, 88, 15, 2, 3, 23, 11]
+
+# 247 RobotArm_6DOF
+# [5, 76, 79, 6, 21, 81, 52, 104, 103, 95, 64, 112, 106, 102, 18, 63, 78, 68, 7, 
+# 17, 71, 100, 98, 73, 39, 34, 93, 77, 8, 20, 31, 85, 111, 13, 62, 53, 40, 49, 
+# 94, 9, 66, 51, 46, 19, 25, 107, 54, 90, 99, 59, 4, 10, 44, 86, 109, 60, 57, 
+# 32, 70, 83, 108, 80, 89, 96, 22, 48, 24, 37, 26, 105, 97, 36, 1, 87, 56, 50, 
+# 35, 45, 16, 30, 28, 29, 92, 110, 43, 33, 91, 75, 74, 58, 82, 42, 41, 47, 72, 
+# 55, 69, 38, 27, 0, 14, 88, 12, 15, 3, 2, 11, 23]
+
+# 426 g
+# [99, 81, 123, 106, 68, 46, 66, 6, 89, 83, 4, 34, 90, 0, 125, 88, 140, 113, 
+# 129, 80, 51, 41, 49, 108, 67, 98, 84, 37, 21, 76, 62, 52, 24, 74, 101, 19, 13, 
+# 11, 79, 110, 60, 72, 114, 2, 20, 134, 27, 56, 116, 93, 31, 133, 85, 118, 50, 
+# 26, 3, 120, 55, 121, 43, 70, 97, 40, 122, 54, 87, 96, 5, 25, 61, 91, 105, 1, 
+# 18, 86, 75, 57, 64, 82, 29, 48, 63, 77, 47, 38, 78, 17, 45, 10, 39, 16, 102, 
+# 69, 119, 104, 71, 22, 9, 32, 7, 36, 115, 53, 124, 23, 59, 44, 12, 42, 30, 8, 
+# 35, 100, 112, 58, 33, 15, 28, 14, 94, 65]
+
 
 parser = argparse.ArgumentParser()
 
@@ -65,14 +98,15 @@ GAE_LAMBDA = parameters["ppo"]["gae_lambda"]
 EPS = parameters["ppo"]["clip_param"]
 MINIBATCHES = parameters["ppo"]["num_minibatches"]
 
-ROLLOUT_LENGTH = parameters["ppo"]["rollout_length"]
+ROLLOUT_LENGTH = int(graph_shape[-2] - graph_shape[-1]) # parameters["ppo"]["rollout_length"]
 OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
 NUM_ACTIONS = graph.shape[-1] # ROLLOUT_LENGTH # TODO fix this
 MINIBATCHSIZE = NUM_ENVS*ROLLOUT_LENGTH//MINIBATCHES
 
 policy_key, value_key = jrand.split(key, 2)
-policy_net = PolicyNet(graph_shape, 64, 3, 6, ff_dim=256, mlp_dims=[256, 256], key=policy_key)
-value_net = ValueNet(graph_shape, 64, 2, 6, ff_dim=256, mlp_dims=[256, 128, 64], key=value_key)
+# Larger models seem to help
+policy_net = PolicyNet(graph_shape, 64, 4, 6, ff_dim=256, mlp_dims=[256, 256], key=policy_key)
+value_net = ValueNet(graph_shape, 64, 3, 6, ff_dim=256, mlp_dims=[256, 128, 64], key=value_key)
 p_init_key, v_init_key = jrand.split(key, 2)
 
 init_fn = jnn.initializers.orthogonal(jnp.sqrt(2))
@@ -100,8 +134,10 @@ policy_net = init_weight(policy_net, init_fn, p_init_key)
 value_net = init_weight(value_net, init_fn, v_init_key)
     
     
-run_config = {"entropy_weight": ENTROPY_WEIGHT, 
+run_config = {"seed": args.seed,
+                "entropy_weight": ENTROPY_WEIGHT, 
                 "value_weight": VALUE_WEIGHT, 
+                "lr": LR,
                 "episodes": EPISODES, 
                 "batchsize": NUM_ENVS, 
                 "gae_lambda": GAE_LAMBDA, 
@@ -117,24 +153,23 @@ run_config = {"entropy_weight": ENTROPY_WEIGHT,
 
 wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
             host="https://wandb.fz-juelich.de")
-wandb.init(entity="ja-lohoff", project="AlphaGrad", group=args.task)
+wandb.init(entity="ja-lohoff", project="AlphaGrad", 
+            group=args.task, config=run_config)
 wandb.run.name = "PPO_separate_networks_" + args.task + "_" + args.name
+
+# Value scaling functions
+def value_transform(x):
+    return symlog(x)
+
+def inverse_value_transform(x):
+    return symexp(x)
 
 
 # Definition of some RL metrics for diagnostics
-def explained_variance(advantage, empirical_return):
-    return 1. - jnp.var(advantage)/jnp.var(empirical_return)
-
-
 def get_num_clipping_triggers(ratio):
     _ratio = jnp.where(ratio <= 1.+EPS, ratio, 0.)
     _ratio = jnp.where(ratio >= 1.-EPS, 1., 0.)
     return jnp.sum(_ratio)
-
-
-# Function to calculate the entropy of a probability distribution
-def entropy(prob_dist):
-    return -jnp.sum(prob_dist*jnp.log(prob_dist + 1e-7), axis=-1)
 
 
 @partial(jax.vmap, in_axes=(None, 0, 0, 0))
@@ -145,11 +180,10 @@ def get_log_probs_and_value(networks, state, action, key):
     logits = policy_net(state, key=key)
     value = value_net(state, key=key)
     
-    prob_dist = jnn.softmax(logits, axis=-1)
-    masked_prob_dist = prob_dist*mask / (jnp.sum(prob_dist*mask, axis=-1) + 1e-7)
+    prob_dist = jnn.softmax(logits, axis=-1, where=mask, initial=mask.max())
 
     log_prob = jnp.log(prob_dist[action] + 1e-7)
-    return log_prob, masked_prob_dist, value, entropy(masked_prob_dist)
+    return log_prob, prob_dist, value, entropy(prob_dist)
 
 
 @jax.jit
@@ -191,8 +225,8 @@ def get_advantages(trajectories):
         episodic_return, lastgaelam = carry
         reward = traj[0]
         done = traj[1]
-        value = symexp(traj[2])
-        next_value = symexp(traj[3])
+        value = inverse_value_transform(traj[2])
+        next_value = inverse_value_transform(traj[3])
         discount = traj[4]
         # Simplest advantage estimate
         # The advantage estimate has to be done with the states and actions 
@@ -231,15 +265,13 @@ def rollout_fn(networks, rollout_length, init_carry, key):
     keys = jrand.split(key, rollout_length)
     policy_net, value_net = networks
     def step_fn(state, key):
+        mask = 1. - state.at[1, 0, :].get()
         net_key, next_net_key, act_key = jrand.split(key, 3)
         
         logits = policy_net(state, key=net_key)
-        prob_dist = jnn.softmax(logits, axis=-1)
+        prob_dist = jnn.softmax(logits, axis=-1, where=mask, initial=mask.max())
         
-        mask = 1. - state.at[1, 0, :].get()
-        masked_prob_dist = prob_dist*mask / (jnp.sum(prob_dist*mask, axis=-1) + 1e-7)
-        
-        distribution = distrax.Categorical(probs=masked_prob_dist)
+        distribution = distrax.Categorical(probs=prob_dist)
         action = distribution.sample(seed=act_key)
         
         next_state, reward, done = step(state, action)
@@ -252,7 +284,7 @@ def rollout_fn(networks, rollout_length, init_carry, key):
                                     jnp.array([done]),
                                     next_state.flatten(), 
                                     jnp.array([next_value]),
-                                    masked_prob_dist, 
+                                    prob_dist, 
                                     jnp.array([discount]))) # (sars')
         
         return next_state, new_sample
@@ -290,10 +322,10 @@ def loss(networks, trajectories, keys):
     clipping_objective = jnp.minimum(ratio*norm_adv, jnp.clip(ratio, 1.-EPS, 1.+EPS)*norm_adv)
     ppo_loss = jnp.mean(-clipping_objective)
     entropy_loss = jnp.mean(entropies)
-    value_loss = .5*jnp.mean((values - symlog(returns))**2)
+    value_loss = .5*jnp.mean((values - value_transform(returns))**2)
     
     # Metrics
-    dV = returns - rewards - discounts*symexp(next_values) # assess fit quality
+    dV = returns - rewards - discounts*inverse_value_transform(next_values) # assess fit quality
     fit_quality = jnp.mean(jnp.abs(dV))
     explained_var = explained_variance(advantages, returns)
     kl_div = jnp.mean(optax.kl_divergence(jnp.log(prob_dist + 1e-7), old_prob_dist))
@@ -329,8 +361,10 @@ model = (policy_net, value_net)
 
 
 # Define optimizer
-schedule = LR # optax.linear_schedule(LR, 0., EPISODES)
-optim = optax.chain(optax.adam(schedule), optax.clip_by_global_norm(.5))
+# TODO test L2 norm and stationary ADAM for better stability
+schedule = optax.cosine_decay_schedule(LR, 5000, 0.)
+optim = optax.chain(optax.adam(schedule, b1=.9, eps=1e-7), 
+                    optax.clip_by_global_norm(.5))
 opt_state = optim.init(eqx.filter(model, eqx.is_inexact_array))
 
 
@@ -368,7 +402,7 @@ for episode in pbar:
     kl_div, policy_entropy, fit_quality, explained_var, ppo_loss, value_loss, entropy_loss, total_loss, clipping_trigger_ratio = metrics
     
     test_keys = jrand.split(key, NUM_ENVS)
-    best_return, best_act_seq, returns = test_agent(model, 98, test_keys)
+    best_return, best_act_seq, returns = test_agent(model, ROLLOUT_LENGTH, test_keys)
     
     if best_return > best_global_return:
         best_global_return = best_return
@@ -392,8 +426,9 @@ for episode in pbar:
                 "total loss": total_loss,
                 "clipping trigger ratio": clipping_trigger_ratio})
         
-    pbar.set_description(f"entropy: {policy_entropy:.4f}, best_return: {best_return}, mean_return: {jnp.mean(returns)}, fit_quality: {fit_quality:.2f}, expl_var: {explained_var:.4}, kl_div: {kl_div:.4f}")
+    pbar.set_description(f"entropy: {policy_entropy:.4f}, best_return: {best_return}, mean_return: {jnp.mean(returns)}, fit_quality: {fit_quality:.2f}, expl_var: {explained_var:.4f}, kl_div: {kl_div:.4f}")
         
 wandb.log({"Elimination order": elim_order_table})
 vertex_elimination_order = [int(i) for i in best_act_seq]
 print(f"Best vertex elimination sequence after {EPISODES} episodes is {vertex_elimination_order} with {best_global_return} multiplications.")
+

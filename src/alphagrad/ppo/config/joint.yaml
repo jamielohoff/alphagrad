@@ -1,4 +1,4 @@
-task: "RoeFlux_1d"
+tasks: ["RoeFlux_1d", "RobotArm_6DOF", "g"]
 
 hyperparameters:
   num_envs: 32

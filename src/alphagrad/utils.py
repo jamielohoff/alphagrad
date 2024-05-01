@@ -20,6 +20,15 @@ def symexp(x: Array) -> Array:
     return jnp.sign(x)*jnp.exp(jnp.abs(x)-1)  
 
 
+# Taken from https://arxiv.org/pdf/1805.11593
+def default_value_transform(x: Array, eps: float = 0.001) -> Array:
+    return jnp.sign(x)*(jnp.sqrt(jnp.abs(x)+1)-1) + eps*x
+
+
+def default_inverse_value_transform(x: Array, eps: float = 0.001) -> Array:
+    return jnp.sign(x)*((( jnp.sqrt( 1+4*eps*(jnp.abs(x)+1+eps) ) - 1 )/(2*eps))**2 - 1)
+
+
 # Definition of some RL metrics for diagnostics
 def explained_variance(value, empirical_return):
     return 1. - jnp.var(value)/jnp.var(empirical_return)
@@ -30,8 +39,10 @@ def entropy(prob_dist):
     return -jnp.sum(prob_dist*jnp.log(prob_dist + 1e-7), axis=-1)
 
 
-@ft.partial(jax.vmap, in_axes=(None, 0, 0, 0, None, None, None, 0))
-def A0_loss_fn(network, 
+@ft.partial(jax.vmap, in_axes=(None, None, None, 0, 0, 0, None, None, None, 0))
+def A0_loss_fn(value_transform,
+				inverse_value_transform,
+    			network, 
 				policy_target,
 				value_target,
 				state,
@@ -62,13 +73,13 @@ def A0_loss_fn(network,
 
 	policy_probs = jnn.softmax(policy_logits, axis=-1) # action_weights are a probability distribution!
 	policy_log_probs = jnn.log_softmax(policy_logits, axis=-1)
-	# policy_loss = -jnp.dot(policy_log_probs, policy_target)
-	# entropy_reg = -jnp.sum(policy_log_probs*jnp.exp(policy_log_probs))
-	policy_loss = optax.softmax_cross_entropy(policy_logits, policy_target).sum() # -jnp.sum(policy_probs*(jnp.log(policy_target+1e-7) - policy_log_probs))
+	policy_loss = optax.softmax_cross_entropy(policy_logits, lax.stop_gradient(policy_target)).sum()
 	entropy = -jnp.sum(policy_probs*policy_log_probs)
  
 	# Added symlog for reward scaling
-	value_loss = optax.l2_loss(value, symlog(value_target[0]))
+	# TODO: Gumbel MuZero found a cross entropy loss to be more stable for variable
+	# scale value targets
+	value_loss = optax.l2_loss(value, lax.stop_gradient(value_transform(value_target[0])))
  
 	# Computing the L2 regularization
 	params = eqx.filter(network, eqx.is_array)
@@ -91,7 +102,9 @@ def A0_loss_fn(network,
 
 
 
-def A0_loss(network, 
+def A0_loss(value_transform,
+			inverse_value_transform,
+    		network, 
             policy_target, 
             value_target,
             state, 
@@ -99,7 +112,9 @@ def A0_loss(network,
             L2_weight,
             entropy_weight,
             keys):
-	loss, aux =  A0_loss_fn(network, 
+	loss, aux =  A0_loss_fn(value_transform,
+							inverse_value_transform,
+    						network, 
 							policy_target, 
 							value_target, 
 							state,
@@ -126,8 +141,8 @@ def postprocess_data(data: Array) -> Array:
 	Returns:
 		_type_: _description_
 	"""
-	values = data[::-1, -2]
-	return data.at[:, -2].set(values)
+	values = data[::-1, -3]
+	return data.at[:, -3].set(values)
 
 
 def make_init_state(edges, key):

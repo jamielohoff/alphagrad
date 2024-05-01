@@ -1,22 +1,24 @@
 task: "RoeFlux_1d"
 
 hyperparameters:
-  num_envs: 16
+  num_envs: 24 # this needs to be much larger probably
   batchsize: 4096
   episodes: 5000
   entropy_weight: 0.01
   value_weight: 1.
   l2_weight: 0.0001
-  lr: 0.0001
+  lr: 0.001
+  discount: 1.0
 
   A0:
-    gumbel_scale: 0.2
+    gumbel_scale: 0.5
     num_considered_actions: 5
     num_simulations: 25
-    replay_buffer_size: 100000
+    replay_buffer_size: 50000 # too large of a replay buffer not good
+    lookback: 1
 
     qtransform:
-      value_scale: 0.01
+      value_scale: 1.0
       maxvisit_init: 25
-      rescale_values: False  
+      rescale_values: True
 

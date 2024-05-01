@@ -23,12 +23,10 @@ from alphagrad.config import setup_experiment
 from alphagrad.experiments import make_benchmark_scores
 from alphagrad.vertexgame import step
 from alphagrad.alphazero.evaluate import evaluate
-from alphagrad.utils import (A0_loss, get_masked_logits, symlog, symexp, 
-							default_value_transform, default_inverse_value_transform)
+from alphagrad.utils import A0_loss, get_masked_logits, postprocess_data, symlog, symexp
 from alphagrad.alphazero.environment_interaction import (make_recurrent_fn,
 														make_environment_interaction)
 from alphagrad.transformer.models import AlphaZeroModel
-# from alphagrad.resnet.resnet import AlphaZeroModel
 
 parser = argparse.ArgumentParser()
 
@@ -73,7 +71,6 @@ EPISODES = parameters["episodes"]
 ENTROPY_WEIGHT = parameters["entropy_weight"]
 VALUE_WEIGHT = parameters["value_weight"]
 L2_WEIGHT = parameters["l2_weight"] if args.L2 is None else args.L2
-DISCOUNT = parameters["discount"]
 
 NUM_ENVS = parameters["num_envs"]
 PER_DEVICE_NUM_ENVS = NUM_ENVS // jax.device_count("gpu")
@@ -86,7 +83,7 @@ NUM_SIMULATIONS = parameters["A0"]["num_simulations"]
 NUM_CONSIDERED_ACTIONS = parameters["A0"]["num_considered_actions"]
 REPLAY_BUFFER_SIZE = parameters["A0"]["replay_buffer_size"]
 QTRANSFORM_PARAMS = parameters["A0"]["qtransform"]
-LOOKBACK = parameters["A0"]["lookback"]
+NUM_MINIBATCHES = parameters["A0"]["num_minibatches"]
 
 ROLLOUT_LENGTH = int(graph_shape[1] - graph_shape[2])
 OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
@@ -104,7 +101,6 @@ run_config = {"seed": args.seed,
                 "num_simulations": NUM_SIMULATIONS,
                 "num_considered_actions": NUM_CONSIDERED_ACTIONS,
                 "replay_buffer_size": REPLAY_BUFFER_SIZE,
-                "lookback": LOOKBACK,
                 "qtransform_params": QTRANSFORM_PARAMS,
                 "obs_shape": OBS_SHAPE, 
                 "num_actions": NUM_ACTIONS, 
@@ -128,35 +124,33 @@ model = AlphaZeroModel(graph_shape, 64, 6, 6,
 						value_ff_dims=[256, 128, 64], 
 						key=model_key)
 
-# model = AlphaZeroModel(5*LOOKBACK, NUM_ACTIONS, key=model_key)
+# init_fn = jnn.initializers.glorot_uniform() # jnn.initializers.orthogonal(jnp.sqrt(2))
 
-init_fn = jnn.initializers.glorot_uniform() # jnn.initializers.orthogonal(jnp.sqrt(2))
+# def init_weight(model, init_fn, key):
+#     is_linear = lambda x: isinstance(x, eqx.nn.Linear)
+#     get_weights = lambda m: [x.weight
+#                             for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
+#                             if is_linear(x)]
+#     get_biases = lambda m: [x.bias
+#                             for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
+#                             if is_linear(x) and x.bias is not None]
+#     weights = get_weights(model)
+#     biases = get_biases(model)
+#     new_weights = [init_fn(subkey, weight.shape)
+#                     for weight, subkey in zip(weights, jax.random.split(key, len(weights)))]
+#     new_biases = [jnp.zeros_like(bias) for bias in biases]
+#     new_model = eqx.tree_at(get_weights, model, new_weights)
+#     new_model = eqx.tree_at(get_biases, new_model, new_biases)
+#     return new_model
 
-def init_weight(model, init_fn, key):
-    is_linear = lambda x: isinstance(x, eqx.nn.Linear)
-    get_weights = lambda m: [x.weight
-                            for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
-                            if is_linear(x)]
-    get_biases = lambda m: [x.bias
-                            for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
-                            if is_linear(x) and x.bias is not None]
-    weights = get_weights(model)
-    biases = get_biases(model)
-    new_weights = [init_fn(subkey, weight.shape)
-                    for weight, subkey in zip(weights, jax.random.split(key, len(weights)))]
-    new_biases = [jnp.zeros_like(bias) for bias in biases]
-    new_model = eqx.tree_at(get_weights, model, new_weights)
-    new_model = eqx.tree_at(get_biases, new_model, new_biases)
-    return new_model
-
-# Initialization could help with performance
-model = init_weight(model, init_fn, init_key)
+# # Initialization could help with performance
+# model = init_weight(model, init_fn, init_key)
 
 def value_transform(x):
-    return default_value_transform(x) # symlog(x) # 
+    return symlog(x)
 
 def inverse_value_transform(x):
-    return default_inverse_value_transform(x) # symexp(x) # 
+    return symexp(x)
 
 
 # Setup of the necessary functions for the tree search
@@ -188,14 +182,14 @@ pmap_evaluate = eqx.filter_pmap(eval,
 
 
 def make_init_carry(graph, key):
-    graphs = jnp.tile(graph[jnp.newaxis, ...], (PER_DEVICE_NUM_ENVS, LOOKBACK, 1, 1))
+    graphs = jnp.tile(graph[jnp.newaxis, ...], (PER_DEVICE_NUM_ENVS, 1, 1, 1))
     return (graphs, jnp.zeros(PER_DEVICE_NUM_ENVS), key)
 
 
 def tree_search(graph, model, key):
 	init_carry = make_init_carry(graph, key)
-	final_state, num_muls, data = env_interaction(model, init_carry)
-	return final_state, num_muls, data # postprocess_data(data)
+	data = env_interaction(model, init_carry)
+	return postprocess_data(data)
 
 pmap_tree_search = eqx.filter_pmap(tree_search,
                                    in_axes=(None, None, 0), 
@@ -218,39 +212,28 @@ state_idx = jnp.prod(jnp.array(state_shape))
 policy_idx = state_idx + NUM_ACTIONS
 reward_idx = int(policy_idx + 1)
 value_idx = int(reward_idx + 1)
-split_idxs = (state_idx, policy_idx, reward_idx, value_idx, value_idx+1)
+split_idxs = (state_idx, policy_idx, reward_idx, value_idx)
 
-
-# # Initializing the replay buffer
-# replay_buffer = fbx.make_item_buffer(max_length=REPLAY_BUFFER_SIZE, 
-#                                     min_length=1, 
-#                                     sample_batch_size=BATCHSIZE)
-
-# item_prototype =jnp.zeros(value_idx+2, device=jax.devices("cpu")[0])
 
 # Initializing the replay buffer
-replay_buffer = fbx.make_trajectory_buffer(max_length_time_axis=ROLLOUT_LENGTH, 
-											min_length_time_axis=ROLLOUT_LENGTH, 
-											sample_batch_size=BATCHSIZE,
-											add_batch_size=NUM_ENVS,
-											sample_sequence_length=LOOKBACK,
-											period=1)
+replay_buffer = fbx.make_item_buffer(max_length=REPLAY_BUFFER_SIZE, 
+                                    min_length=1, 
+                                    sample_batch_size=BATCHSIZE)
 
-item_prototype =jnp.zeros(value_idx+2, device=jax.devices("cpu")[0])
+item_prototype =jnp.zeros(value_idx+1, device=jax.devices("cpu")[0])
 
 
 def fill_buffer(replay_buffer, buffer_state, samples):
-	# def loop_fn(buffer_state, sample):
-	# 	# This piece of code removes the final states from the buffer
-	# 	# new_buffer_state = lax.cond(sample[-1] > 0,
-	# 	#                             lambda bs: replay_buffer.add(bs, sample),
-	# 	#                             lambda bs: bs,
-	# 	#                             buffer_state)
-	# 	new_buffer_state = replay_buffer.add(buffer_state, sample)
-	# 	return new_buffer_state, None
-	# samples = samples.reshape(NUM_ENVS*ROLLOUT_LENGTH, -1)
-	# updated_buffer_state, _ = lax.scan(loop_fn, buffer_state, samples)
-	updated_buffer_state = replay_buffer.add(buffer_state, samples)
+	def loop_fn(buffer_state, sample):
+		# This piece of code removes the final states from the buffer
+		# new_buffer_state = lax.cond(sample[-1] > 0,
+		#                             lambda bs: replay_buffer.add(bs, sample),
+		#                             lambda bs: bs,
+		#                             buffer_state)
+		new_buffer_state = replay_buffer.add(buffer_state, sample)
+		return new_buffer_state, None
+	samples = samples.reshape(NUM_ENVS*ROLLOUT_LENGTH, -1)
+	updated_buffer_state, _ = lax.scan(loop_fn, buffer_state, samples)
 	return updated_buffer_state
 
 
@@ -266,60 +249,23 @@ def fill_and_sample(data, buffer_states, key):
 	# Sample from replay buffer
 	samples = sample_fn(buffer_states, key)
 	samples = samples.experience
-	samples = samples.reshape(jax.device_count("gpu"), PER_DEVICE_BATCHSIZE, LOOKBACK, -1)
+	samples = samples.reshape(jax.device_count("gpu"), PER_DEVICE_BATCHSIZE, -1)
 	return samples, buffer_states
 
 
 # Helper functions
 order_idx = 3*graph.shape[-2]*graph.shape[-1]
 end_idx = order_idx+graph.shape[-1]-int(graph_shape[2])
-
-
 @jax.jit
-@jax.vmap
-def _raw_values(data):
-	raw_values = data[:, -2].flatten()
-	return jnp.concatenate([data, raw_values[:, jnp.newaxis]], axis=-1)
-
-
-@jax.jit
-@jax.vmap
-def _compute_return(data):
-	def loop_fn(returns, reward):
-		return (reward + DISCOUNT*returns), reward + DISCOUNT*returns
-
-	rewards = data[:, -3].flatten()
-	_, returns = lax.scan(loop_fn, 0., rewards[::-1])
-	return jnp.concatenate([data, returns[::-1, jnp.newaxis]], axis=-1)
-
-
-@partial(jax.jit, static_argnums=(1,))
-@jax.vmap
-def _compute_bootstrap(data, lookahead: int = 5):
-	rewards = data[:, -3].flatten()
-	values = data[:, -2].flatten()
-	values = jnp.roll(values, -lookahead)
-	values = values.at[-lookahead:].set(0.)
-
-	n_step_return = rewards
-
-	for i in range(1, lookahead):
-		rew = jnp.roll(rewards, -i)
-		rew = rew.at[-i:].set(0.)
-		n_step_return += DISCOUNT**i*rew
-
-	n_step_return += DISCOUNT**5*values
-	return jnp.concatenate([data, n_step_return[:, jnp.newaxis]], axis=-1)
-
-compute_value_targets = _compute_return
-
-
-@jax.jit
-def get_best_act_seq(final_state, num_muls):
-	act_seqs = final_state[:, :, 3, 0, 0:ROLLOUT_LENGTH].reshape(NUM_ENVS, -1)
-	best_num_muls = jnp.max(num_muls)
-	best_act_seq = act_seqs[jnp.argmax(num_muls).astype(jnp.int32)] # TODO fix indexing here!
-	return best_num_muls, best_act_seq
+def get_best_return(data):
+	act_seqs = data[:, :, -1, order_idx:end_idx].reshape(-1, ROLLOUT_LENGTH)
+	# jax.debug.print("value_target={value_target}", value_target=data[0, 0, :, -2].flatten())
+	returns = data[:, :, 0, -3].flatten()
+	jax.debug.print("returns={returns}", returns=returns)
+ 
+	best_return = jnp.max(returns)
+	best_act_seq = act_seqs[jnp.argmax(returns).astype(jnp.int32)] # TODO fix indexing here!
+	return best_return, best_act_seq, returns
 
 
 # Defining the training function
@@ -332,13 +278,13 @@ parallel_mean = lambda x: lax.pmean(x, "num_devices")
         devices=jax.devices("gpu"), 
         donate="all")
 def train_agent(data, model, opt_state, key):
-	state, search_policy, search_rewards, search_value, done, search_target = jnp.split(data, split_idxs, axis=-1)
-	state = state.reshape(PER_DEVICE_BATCHSIZE, 5*LOOKBACK, *state_shape[1:])
-
+	state, search_policy, search_return, search_value, _ = jnp.split(data, split_idxs, axis=-1)
+	state = state.reshape(PER_DEVICE_BATCHSIZE, *state_shape)
+  
 	subkeys = jrand.split(key, PER_DEVICE_BATCHSIZE)
 	val, grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(model, 
-																search_policy[:, -1], 
-																search_target[:, -1], 
+																search_policy, 
+																search_return, 
 																state,
 																VALUE_WEIGHT,
 																L2_WEIGHT,
@@ -360,7 +306,7 @@ test_key, key = jrand.split(key, 2)
 
 env_keys = jrand.split(key, BATCHSIZE)
 print("Scores:", scores)
-best_global_num_muls = jnp.max(-jnp.array(scores))
+best_global_return = jnp.max(-jnp.array(scores))
 best_global_act_seq = None
 
 buffer_state = replay_buffer.init(item_prototype)
@@ -371,34 +317,34 @@ for episode in pbar:
 	data_keys = jrand.split(data_key, jax.device_count("gpu"))
 	train_keys = jrand.split(train_key, jax.device_count("gpu"))
  
-	start_time = time.time()
-	final_state, num_muls, data = pmap_tree_search(graph, model, data_keys)
-	print("tree search time", time.time() - start_time)
+	# start_time = time.time()
+	data = pmap_tree_search(graph, model, data_keys)
+	# print("tree search time", time.time() - start_time)
  
 	# start_time = time.time()
 	data = jax.device_get(data)
-	data = data.reshape(NUM_ENVS, ROLLOUT_LENGTH, -1)
-	data = compute_value_targets(data)
 	# print("transfer time", time.time() - start_time)
+	
+	best_return, best_act_seq, returns = get_best_return(data)
  
-	final_state = jax.device_get(final_state)
-	num_muls = jax.device_get(num_muls)
-	best_num_muls, best_act_seq = get_best_act_seq(final_state, num_muls)
- 
-	if best_num_muls > best_global_num_muls:
-		best_global_return = best_num_muls
+	if best_return > best_global_return:
+		best_global_return = best_return
 		best_global_act_seq = best_act_seq
-		print(f"New best return: {best_num_muls}")
+		print(f"New best return: {best_return}")
 		# vertex_elimination_order = [int(i) for i in best_act_seq]
 		print(f"New best action sequence: {best_act_seq}")
 		# elim_order_table.add_data(episode, best_return, np.array(best_act_seq))
  
+	# start_time = time.time()
 	samples, buffer_state = fill_and_sample(data, buffer_state, sample_key)
-	# TODO: Perform multiple training steps over the replay buffer
-	
-	start_time = time.time()
+	# print("sampling time", time.time() - start_time)
+
+	# Perform multiple training steps over the replay buffer
+	# TODO do proper metrics recording!
+	# 
+	# start_time = time.time()
 	losses, aux, models, opt_states = train_agent(samples, model, opt_state, train_keys)
-	print("training time", time.time() - start_time)	
+	# print("training time", time.time() - start_time)	
 
 	loss = losses[0]
 	aux = aux[0]
@@ -411,8 +357,8 @@ for episode in pbar:
 				"L2 loss": aux[2].tolist(),
 				"entropy loss": aux[3].tolist(),
 				"explained variance": aux[4].tolist(),
-				"best_return": best_num_muls, # TODO maybe change naming once the algorithm works
-    			"mean_return": jnp.mean(num_muls)})
+				"best_return": best_return,
+    			"mean_return": jnp.mean(returns)})
 
-	pbar.set_description(f"loss: {loss:.4f}, best_num_muls: {best_num_muls}, mean_num_muls: {jnp.mean(num_muls):.2f}")
+	pbar.set_description(f"loss: {loss}, best_return: {best_return}, mean_return: {jnp.mean(returns)}")
 
