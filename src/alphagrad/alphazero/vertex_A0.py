@@ -4,8 +4,6 @@ import wandb
 import time
 from functools import partial, reduce
 
-import numpy as np
-
 import jax
 import jax.nn as jnn
 import jax.lax as lax
@@ -29,6 +27,16 @@ from alphagrad.alphazero.environment_interaction import (make_recurrent_fn,
 														make_environment_interaction)
 from alphagrad.transformer.models import AlphaZeroModel
 # from alphagrad.resnet.resnet import AlphaZeroModel
+
+
+# Roe Flux New best return: -323.0
+# New best action sequence: 
+# [ 89  88  48  37  16  80  81   4  19  50  44  32   7  60  91  33  22  14
+# 25  61  27   6  15  93   5  45  77  83  39  12  92  79  75  53   2  69
+#  1  59  17  51  38  35  34   9   8  26  43  85  84  57  96  74  47  72
+# 66  71  78  73  76  82  87  67 100  54  95  42  90  21  94  46  86  55
+# 70  49  29  52  41  28  40  31  23  13   3  68  65  64  30  18  36  24
+# 56  63  58  10  11  62  20  98]
 
 parser = argparse.ArgumentParser()
 
@@ -70,7 +78,7 @@ mM_order, scores = make_benchmark_scores(graph)
 parameters = config["hyperparameters"]
 LR = parameters["lr"]
 EPISODES = parameters["episodes"]
-ENTROPY_WEIGHT = parameters["entropy_weight"]
+ENTROPY_WEIGHT = 0. # parameters["entropy_weight"]
 VALUE_WEIGHT = parameters["value_weight"]
 L2_WEIGHT = parameters["l2_weight"] if args.L2 is None else args.L2
 DISCOUNT = parameters["discount"]
@@ -130,27 +138,27 @@ model = AlphaZeroModel(graph_shape, 64, 6, 6,
 
 # model = AlphaZeroModel(5*LOOKBACK, NUM_ACTIONS, key=model_key)
 
-init_fn = jnn.initializers.glorot_uniform() # jnn.initializers.orthogonal(jnp.sqrt(2))
+# init_fn = jnn.initializers.glorot_uniform() # jnn.initializers.orthogonal(jnp.sqrt(2))
 
-def init_weight(model, init_fn, key):
-    is_linear = lambda x: isinstance(x, eqx.nn.Linear)
-    get_weights = lambda m: [x.weight
-                            for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
-                            if is_linear(x)]
-    get_biases = lambda m: [x.bias
-                            for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
-                            if is_linear(x) and x.bias is not None]
-    weights = get_weights(model)
-    biases = get_biases(model)
-    new_weights = [init_fn(subkey, weight.shape)
-                    for weight, subkey in zip(weights, jax.random.split(key, len(weights)))]
-    new_biases = [jnp.zeros_like(bias) for bias in biases]
-    new_model = eqx.tree_at(get_weights, model, new_weights)
-    new_model = eqx.tree_at(get_biases, new_model, new_biases)
-    return new_model
+# def init_weight(model, init_fn, key):
+#     is_linear = lambda x: isinstance(x, eqx.nn.Linear)
+#     get_weights = lambda m: [x.weight
+#                             for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
+#                             if is_linear(x)]
+#     get_biases = lambda m: [x.bias
+#                             for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
+#                             if is_linear(x) and x.bias is not None]
+#     weights = get_weights(model)
+#     biases = get_biases(model)
+#     new_weights = [init_fn(subkey, weight.shape)
+#                     for weight, subkey in zip(weights, jax.random.split(key, len(weights)))]
+#     new_biases = [jnp.zeros_like(bias) for bias in biases]
+#     new_model = eqx.tree_at(get_weights, model, new_weights)
+#     new_model = eqx.tree_at(get_biases, new_model, new_biases)
+#     return new_model
 
-# Initialization could help with performance
-model = init_weight(model, init_fn, init_key)
+# # Initialization could help with performance
+# model = init_weight(model, init_fn, init_key)
 
 def value_transform(x):
     return default_value_transform(x) # symlog(x) # 
@@ -206,7 +214,7 @@ pmap_tree_search = eqx.filter_pmap(tree_search,
 # Initialization of the optimizer
 # TODO implement proper schedule because dips in the best_return cause model to
 # break after a number of epochs
-lr_schedule = LR # optax.cosine_onecycle_schedule(EPISODES, 2.5e-3, div_factor=250, final_div_factor=250) # LR
+lr_schedule = optax.cosine_decay_schedule(LR, EPISODES) # LR
 optim = optax.chain(optax.adam(lr_schedule, b1=.9, eps=1e-7), 
                     optax.clip_by_global_norm(.5))
 opt_state = optim.init(eqx.filter(model, eqx.is_inexact_array))
@@ -220,14 +228,6 @@ reward_idx = int(policy_idx + 1)
 value_idx = int(reward_idx + 1)
 split_idxs = (state_idx, policy_idx, reward_idx, value_idx, value_idx+1)
 
-
-# # Initializing the replay buffer
-# replay_buffer = fbx.make_item_buffer(max_length=REPLAY_BUFFER_SIZE, 
-#                                     min_length=1, 
-#                                     sample_batch_size=BATCHSIZE)
-
-# item_prototype =jnp.zeros(value_idx+2, device=jax.devices("cpu")[0])
-
 # Initializing the replay buffer
 replay_buffer = fbx.make_trajectory_buffer(max_length_time_axis=ROLLOUT_LENGTH, 
 											min_length_time_axis=ROLLOUT_LENGTH, 
@@ -240,16 +240,6 @@ item_prototype =jnp.zeros(value_idx+2, device=jax.devices("cpu")[0])
 
 
 def fill_buffer(replay_buffer, buffer_state, samples):
-	# def loop_fn(buffer_state, sample):
-	# 	# This piece of code removes the final states from the buffer
-	# 	# new_buffer_state = lax.cond(sample[-1] > 0,
-	# 	#                             lambda bs: replay_buffer.add(bs, sample),
-	# 	#                             lambda bs: bs,
-	# 	#                             buffer_state)
-	# 	new_buffer_state = replay_buffer.add(buffer_state, sample)
-	# 	return new_buffer_state, None
-	# samples = samples.reshape(NUM_ENVS*ROLLOUT_LENGTH, -1)
-	# updated_buffer_state, _ = lax.scan(loop_fn, buffer_state, samples)
 	updated_buffer_state = replay_buffer.add(buffer_state, samples)
 	return updated_buffer_state
 
@@ -386,7 +376,7 @@ for episode in pbar:
 	best_num_muls, best_act_seq = get_best_act_seq(final_state, num_muls)
  
 	if best_num_muls > best_global_num_muls:
-		best_global_return = best_num_muls
+		best_global_num_muls = best_num_muls
 		best_global_act_seq = best_act_seq
 		print(f"New best return: {best_num_muls}")
 		# vertex_elimination_order = [int(i) for i in best_act_seq]

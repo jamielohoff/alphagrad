@@ -27,8 +27,11 @@ class GraphEmbedding(eqx.Module):
         super().__init__()
         num_i, num_vo, num_o = graph_shape
         embed_key, token_key, proj_key = jrand.split(key, 3)
-        self.embedding = eqx.nn.Conv2d(num_vo, num_vo, (5, 1), stride=(1, 1), key=embed_key)
-        self.projection = jrand.normal(proj_key, (num_i+num_vo, embedding_dim))
+        kernel_size, stride = 1, 1
+        self.embedding = eqx.nn.Conv2d(num_vo, num_vo, (5, kernel_size), 
+                                        stride=(1, stride), key=embed_key)
+        conv_size = (num_i+num_vo-kernel_size) // stride+1
+        self.projection = jrand.normal(proj_key, (conv_size, embedding_dim))
         # self.output_token = jrand.normal(token_key, (num_i+num_vo, 1))
     
     def __call__(self, graph: Array, key: PRNGKey = None) -> Array:
@@ -190,9 +193,9 @@ class AlphaZeroModel(eqx.Module):
                                                 **kwargs)
     
     def __call__(self, xs: Array, key: PRNGKey = None) -> Array:
-        # output_mask = xs.at[2, 0, :].get()
-        # vertex_mask = xs.at[1, 0, :].get() - output_mask
-        # attn_mask = jnp.logical_or(vertex_mask.reshape(1, -1), vertex_mask.reshape(-1, 1))
+        output_mask = xs.at[2, 0, :].get()
+        vertex_mask = xs.at[1, 0, :].get() - output_mask
+        attn_mask = jnp.logical_or(vertex_mask.reshape(1, -1), vertex_mask.reshape(-1, 1))
         
         # output_token_mask = jnp.where(xs.at[2, 0, :].get() > 0, self.output_token, 0.)
         edges = xs.at[:, 1:, :].get() #  + output_token_mask[jnp.newaxis, :, :]
@@ -200,7 +203,7 @@ class AlphaZeroModel(eqx.Module):
         
         embeddings = self.embedding(edges.transpose(2, 0, 1)).squeeze()
         embeddings = jax.vmap(jnp.matmul, in_axes=(0, None))(embeddings, self.projection)
-        return self.transformer(embeddings.T, mask=None, key=key)
+        return self.transformer(embeddings.T, mask=attn_mask, key=key)
     
 
 class PolicyNet(eqx.Module):

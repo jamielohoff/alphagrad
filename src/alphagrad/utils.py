@@ -71,15 +71,16 @@ def A0_loss_fn(value_transform,
 	policy_logits = output[1:]
 	value = output[0]
 
-	policy_probs = jnn.softmax(policy_logits, axis=-1) # action_weights are a probability distribution!
-	policy_log_probs = jnn.log_softmax(policy_logits, axis=-1)
-	policy_loss = optax.softmax_cross_entropy(policy_logits, lax.stop_gradient(policy_target)).sum()
-	entropy = -jnp.sum(policy_probs*policy_log_probs)
+	policy_probs = jnn.softmax(policy_logits, axis=-1)
+
+ 	# action_weights, i.e. policy_target are a probability distribution!
+	policy_loss = optax.softmax_cross_entropy(policy_logits, policy_target)
+	entropy = optax.softmax_cross_entropy(policy_logits, policy_probs)
  
 	# Added symlog for reward scaling
 	# TODO: Gumbel MuZero found a cross entropy loss to be more stable for variable
 	# scale value targets
-	value_loss = optax.l2_loss(value, lax.stop_gradient(value_transform(value_target[0])))
+	value_loss = optax.l2_loss(value, value_transform(value_target[0]))
  
 	# Computing the L2 regularization
 	params = eqx.filter(network, eqx.is_array)
@@ -91,8 +92,6 @@ def A0_loss_fn(value_transform,
  
 	loss = policy_loss 
 	loss += value_weight*value_loss 
-	loss += L2_weight*L2_loss
-	# loss += entropy_weight*entropy_reg
 	aux = jnp.stack((policy_loss, 
                 	value_weight*value_loss, 
                  	L2_weight*L2_loss, 

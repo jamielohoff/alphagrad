@@ -5,10 +5,8 @@ import jax.random as jrand
 from .vertexgame import (make_graph, get_graph_shape, forward, 
                         reverse, minimal_markowitz, cross_country)
 from graphax.examples import RoeFlux_1d, RoeFlux_3d, RobotArm_6DOF, f, g, Helmholtz
+from graphax.examples import Perceptron, HumanHeartDipole, PropaneCombustion, Encoder
 # TODO add Hessian and ViT examples
-
-
-
 
 
 def make_benchmark_scores(graph):
@@ -31,6 +29,16 @@ def make_fn(fn, *xs):
 def make_Helmholtz():
     xs = [jnp.array([.05, .15, .15, 0.2])]
     return make_fn(Helmholtz, *xs)
+
+
+def make_HumanHeartDipole():
+    xs = [.15]*8
+    return make_fn(HumanHeartDipole, *xs)
+
+
+def make_PropaneCombustion():
+    xs = [.15]*11
+    return make_fn(PropaneCombustion, *xs)
 
 
 def make_RoeFlux_1d():
@@ -67,4 +75,48 @@ def make_f():
 def make_g():
     xs = [.15]*15
     return make_fn(g, *xs)
+
+
+def make_Perceptron():
+    key = jrand.PRNGKey(1234)
+
+    x = jnp.ones(4)
+    y = jrand.normal(key, (4,))
+
+    w1key, b1key, key = jrand.split(key, 3)
+    W1 = jrand.normal(w1key, (8, 4))
+    b1 = jrand.normal(b1key, (8,))
+
+    w2key, b2key, key = jrand.split(key, 3)
+    W2 = jrand.normal(w2key, (4, 8))
+    b2 = jrand.normal(b2key, (4,))
+
+    xs = (x, y, W1, b1, W2, b2, 0., 1.)
+    return make_fn(Perceptron, *xs)
+
+
+def make_Encoder():
+    key = jrand.PRNGKey(250197)
+    x = jnp.ones((4, 4))
+    y = jrand.normal(key, (2, 4))
+
+    wq1key, wk1key, wv1key, key = jrand.split(key, 4)
+    WQ1 = jrand.normal(wq1key, (4, 4))
+    WK1 = jrand.normal(wk1key, (4, 4))
+    WV1 = jrand.normal(wv1key, (4, 4))
+
+    wq2key, wk2key, wv2key, key = jrand.split(key, 4)
+    WQ2 = jrand.normal(wq2key, (4, 4))
+    WK2 = jrand.normal(wk2key, (4, 4))
+    WV2 = jrand.normal(wv2key, (4, 4))
+
+    w1key, w2key, b1key, b2key = jrand.split(key, 4)
+    W1 = jrand.normal(w1key, (4, 4))
+    b1 = jrand.normal(b1key, (4,))
+
+    W2 = jrand.normal(w2key, (2, 4))
+    b2 = jrand.normal(b2key, (2, 1))
+    
+    xs = (x, y, WQ1, WQ2, WK1, WK2, WV1, WV2, W1, W2, b1, b2, 0., 1., 0., 1.)
+    return make_fn(Encoder, *xs)
 

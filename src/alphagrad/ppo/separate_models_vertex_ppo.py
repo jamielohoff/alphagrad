@@ -27,6 +27,7 @@ from alphagrad.vertexgame import step
 from alphagrad.utils import symlog, symexp, entropy, explained_variance
 from alphagrad.transformer.models import PolicyNet, ValueNet
 
+
 # 324 RoeFlux_1d
 # [68, 16, 24, 76, 63, 32, 70, 61, 80, 38, 52, 99, 43, 30, 83, 34, 74, 86, 62, 
 # 8, 67, 4, 37, 50, 3, 44, 33, 15, 7, 42, 26, 28, 41, 10, 97, 21, 13, 88, 59, 
@@ -58,6 +59,16 @@ from alphagrad.transformer.models import PolicyNet, ValueNet
 # 18, 86, 75, 57, 64, 82, 29, 48, 63, 77, 47, 38, 78, 17, 45, 10, 39, 16, 102, 
 # 69, 119, 104, 71, 22, 9, 32, 7, 36, 115, 53, 124, 23, 59, 44, 12, 42, 30, 8, 
 # 35, 100, 112, 58, 33, 15, 28, 14, 94, 65]
+
+# 877 RoeFlux_3d
+# [96, 27, 126, 101, 75, 24, 118, 22, 3, 134, 8, 121, 97, 36, 82, 63, 81, 44, 
+# 39, 94, 60, 85, 108, 42, 95, 88, 104, 61, 65, 28, 49, 128, 77, 136, 109, 38, 
+# 64, 129, 68, 26, 78, 69, 18, 84, 105, 116, 37, 21, 113, 13, 124, 4, 86, 71, 
+# 100, 34, 83, 80, 51, 58, 33, 11, 35, 5, 54, 123, 47, 56, 66, 92, 90, 15, 23, 
+# 30, 127, 20, 93, 125, 40, 2, 9, 62, 72, 103, 120, 89, 59, 76, 111, 115, 106, 
+# 119, 45, 112, 19, 67, 52, 10, 110, 102, 48, 98, 107, 31, 122, 114, 43, 87, 91, 
+# 132, 50, 70, 7, 14, 0, 79, 32, 55, 17, 53, 117, 12, 99, 74, 6, 29, 130, 131, 
+# 25, 73, 46, 57, 1, 41, 16]
 
 
 parser = argparse.ArgumentParser()
@@ -108,8 +119,8 @@ MINIBATCHSIZE = NUM_ENVS*ROLLOUT_LENGTH//MINIBATCHES
 
 policy_key, value_key = jrand.split(key, 2)
 # Larger models seem to help
-policy_net = PolicyNet(graph_shape, 64, 4, 6, ff_dim=256, mlp_dims=[256, 256], key=policy_key)
-value_net = ValueNet(graph_shape, 64, 3, 6, ff_dim=256, mlp_dims=[256, 128, 64], key=value_key)
+policy_net = PolicyNet(graph_shape, 64, 5, 6, ff_dim=256, mlp_dims=[256, 256], key=policy_key)
+value_net = ValueNet(graph_shape, 64, 4, 6, ff_dim=256, mlp_dims=[256, 128, 64], key=value_key)
 p_init_key, v_init_key = jrand.split(key, 2)
 
 init_fn = jnn.initializers.orthogonal(jnp.sqrt(2))
@@ -160,6 +171,7 @@ wandb.init(entity="ja-lohoff", project="AlphaGrad",
             group=args.task, config=run_config,
             mode=args.wandb)
 wandb.run.name = "PPO_separate_networks_" + args.task + "_" + args.name
+
 
 # Value scaling functions
 def value_transform(x):
@@ -366,7 +378,7 @@ model = (policy_net, value_net)
 
 # Define optimizer
 # TODO test L2 norm and stationary ADAM for better stability
-schedule = optax.cosine_decay_schedule(LR, 5000, 0.)
+schedule = LR # optax.cosine_decay_schedule(LR, 5000, 0.)
 optim = optax.chain(optax.adam(schedule, b1=.9, eps=1e-7), 
                     optax.clip_by_global_norm(.5))
 opt_state = optim.init(eqx.filter(model, eqx.is_inexact_array))

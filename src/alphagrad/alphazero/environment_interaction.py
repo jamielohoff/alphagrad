@@ -99,6 +99,7 @@ def make_environment_interaction(value_transform: Callable,
             value = inverse_value_transform(output[:, 0])
 
             # Configuring root node of the tree search
+            # jax.debug.print("policy_logits={policy_logits}", policy_logits=policy_logits[0])
             root = mctx.RootFnOutput(prior_logits=policy_logits, 
                                     value=value, 
                                     embedding=states)
@@ -119,8 +120,8 @@ def make_environment_interaction(value_transform: Callable,
             search_policy = policy_output.action_weights
             # jax.debug.print("search_policy={search_policy}", search_policy=search_policy[0])
             # search_value = policy_output.search_tree.qvalues(jnp.full(batchsize, policy_output.search_tree.ROOT_INDEX))[jnp.arange(batchsize), policy_output.action]
-            search_value = policy_output.search_tree.node_values[:, policy_output.search_tree.ROOT_INDEX]
-            jax.debug.print("search_value={search_value}", search_value=search_value)
+            # search_value = policy_output.search_tree.node_values[:, policy_output.search_tree.ROOT_INDEX]
+            # jax.debug.print("search_value={search_value}", search_value=search_value)
             
             # Always take action recommended by tree search because for this
             # action, the gumbel method guarantees a policy improvement
