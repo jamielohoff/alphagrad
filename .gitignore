@@ -62,3 +62,7 @@ MANIFEST
 *.hdf5
 *.h5
 *.eqx
+
+# slurm stuff
+**/logs
+**/slurm

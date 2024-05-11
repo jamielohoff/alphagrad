@@ -106,7 +106,7 @@ model_key, init_key, key = jrand.split(key, 3)
 # 40, 42, 27, 37, 34, 26, 90, 4, 68, 73, 16, 81, 47, 72, 69, 97, 110, 58, 91, 
 # 39, 53, 30, 0, 29, 12, 14, 108, 36, 3, 2, 15, 23, 11]
 
-# oNe found 241! mults
+# One found 241! mults
 
 config, graph, graph_shape, task_fn = setup_experiment(args.task, args.config_path)
 mM_order, scores = make_benchmark_scores(graph)

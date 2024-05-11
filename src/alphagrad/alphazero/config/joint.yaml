@@ -1,8 +1,9 @@
-task: "RobotArm_6DOF"
+tasks: ["RoeFlux_1d", "RoeFlux_3d", "RobotArm_6DOF", "g", "f", "Encoder", 
+        "Perceptron", "PropaneCombustion", "HumanHeartDipole"]
 
 hyperparameters:
-  num_envs: 32 # this needs to be much larger probably
-  batchsize: 4096
+  num_envs: 16 # this needs to be much larger probably
+  batchsize: 2048
   episodes: 5000
   value_weight: 10.
   l2_weight: 0.0001

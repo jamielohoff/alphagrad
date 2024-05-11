@@ -1,4 +1,4 @@
-task: "HumanHeartDipole"
+task: "Perceptron"
 
 hyperparameters:
   num_envs: 32 # this needs to be much larger probably
@@ -11,13 +11,13 @@ hyperparameters:
 
   A0:
     gumbel_scale: 1.0
-    num_considered_actions: 5
-    num_simulations: 50
-    replay_buffer_size: 50000 # too large of a replay buffer not good
+    num_considered_actions: 7
+    num_simulations: 100
+    replay_buffer_size: 50000 # too large of a replay buffer is not good
     lookback: 1
 
-    qtransform:
-      value_scale: .01
+    qtransform: # clibration of qtransform very important for learning
+      value_scale: 0.01
       maxvisit_init: 25
       rescale_values: True
 

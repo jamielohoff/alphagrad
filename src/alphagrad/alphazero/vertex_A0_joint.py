@@ -17,26 +17,15 @@ import equinox as eqx
 
 from tqdm import tqdm
 
-from alphagrad.config import setup_experiment
+from alphagrad.config import setup_joint_experiment
 from alphagrad.experiments import make_benchmark_scores
-from alphagrad.vertexgame import step
+from alphagrad.vertexgame import step, embed
 from alphagrad.alphazero.evaluate import evaluate
 from alphagrad.utils import (A0_loss, get_masked_logits, symlog, symexp, 
 							default_value_transform, default_inverse_value_transform)
 from alphagrad.alphazero.environment_interaction import (make_recurrent_fn,
 														make_environment_interaction)
 from alphagrad.transformer.models import AlphaZeroModel
-# from alphagrad.resnet.resnet import AlphaZeroModel
-
-
-# Roe Flux New best return: -323.0
-# New best action sequence: 
-# [ 89  88  48  37  16  80  81   4  19  50  44  32   7  60  91  33  22  14
-# 25  61  27   6  15  93   5  45  77  83  39  12  92  79  75  53   2  69
-#  1  59  17  51  38  35  34   9   8  26  43  85  84  57  96  74  47  72
-# 66  71  78  73  76  82  87  67 100  54  95  42  90  21  94  46  86  55
-# 70  49  29  52  41  28  40  31  23  13   3  68  65  64  30  18  36  24
-# 56  63  58  10  11  62  20  98]
 
 
 parser = argparse.ArgumentParser()
@@ -73,8 +62,25 @@ print("CPU devices:", jax.devices("cpu"))
 print("GPU devices:", jax.devices("gpu"))
 
 
-config, graph, graph_shape, task_fn = setup_experiment(args.task, args.config_path)
-mM_order, scores = make_benchmark_scores(graph)
+config, graphs, graph_shapes, task_fns = setup_joint_experiment(args.config_path)
+NAMES = config["tasks"]
+
+max_graph = max(graphs, key=lambda x: x.shape[-1])
+max_graph_shape = max(graph_shapes, key=lambda x: x[1])
+
+GRAPH_REPO = []
+orders_scores = {}
+for name, graph in zip(NAMES, graphs):
+    key, subkey = jrand.split(key, 2)
+    mM_order, scs = make_benchmark_scores(graph)
+    orders_scores[name] = {"order": mM_order, 
+                            "fwd_fmas":scs[0],
+                            "rev_fmas":scs[1],
+                            "mM_fmas":scs[2]}
+    _graph = embed(subkey, graph, max_graph_shape)
+    GRAPH_REPO.append(_graph)
+    
+GRAPH_REPO = jnp.stack(GRAPH_REPO, axis=0)
 
 parameters = config["hyperparameters"]
 LR = parameters["lr"]
@@ -97,7 +103,7 @@ REPLAY_BUFFER_SIZE = parameters["A0"]["replay_buffer_size"]
 QTRANSFORM_PARAMS = parameters["A0"]["qtransform"]
 LOOKBACK = parameters["A0"]["lookback"]
 
-ROLLOUT_LENGTH = int(graph.shape[2] - graph_shape[2])
+ROLLOUT_LENGTH = int(max_graph_shape[-2] - max_graph_shape[-1])
 OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
 NUM_ACTIONS = graph.shape[-1] # ROLLOUT_LENGTH # TODO fix this
 
@@ -118,9 +124,7 @@ run_config = {"seed": args.seed,
                 "obs_shape": OBS_SHAPE, 
                 "num_actions": NUM_ACTIONS, 
                 "rollout_length": ROLLOUT_LENGTH, 
-                "fwd_fmas": scores[0], 
-                "rev_fmas": scores[1], 
-                "out_fmas": scores[2]}
+                "scores": orders_scores}
 
 wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
             host="https://wandb.fz-juelich.de")
@@ -130,7 +134,7 @@ wandb.run.name = "A0_" + args.task + "_" + args.name
 
 
 key, model_key, init_key = jrand.split(key, 3)
-model = AlphaZeroModel(graph_shape, 64, 6, 6,
+model = AlphaZeroModel(max_graph_shape, 64, 6, 6,
 						ff_dim=256,
 						num_layers_policy=2,
 						policy_ff_dims=[256, 128],
@@ -162,10 +166,10 @@ def init_weight(model, init_fn, key):
 model = init_weight(model, init_fn, init_key)
 
 def value_transform(x):
-    return default_value_transform(x) # symlog(x) # 
+    return symlog(x) # default_value_transform(x) # 
 
 def inverse_value_transform(x):
-    return default_inverse_value_transform(x) # symexp(x) # 
+    return symexp(x) # default_inverse_value_transform(x) # 
 
 
 # Setup of the necessary functions for the tree search
@@ -222,7 +226,7 @@ opt_state = optim.init(eqx.filter(model, eqx.is_inexact_array))
 
 
 # Needed to reassemble data
-state_shape = (5, graph_shape[0]+NUM_ACTIONS+1, NUM_ACTIONS)
+state_shape = (5, max_graph_shape[0]+NUM_ACTIONS+1, NUM_ACTIONS)
 state_idx = jnp.prod(jnp.array(state_shape))
 policy_idx = state_idx + NUM_ACTIONS
 reward_idx = int(policy_idx + 1)
@@ -263,7 +267,7 @@ def fill_and_sample(data, buffer_states, key):
 
 # Helper functions
 order_idx = 3*graph.shape[-2]*graph.shape[-1]
-end_idx = order_idx+graph.shape[-1]-int(graph_shape[2])
+end_idx = order_idx+graph.shape[-1]-int(max_graph_shape[2])
 
 
 @jax.jit
@@ -350,10 +354,13 @@ pbar = tqdm(range(EPISODES))
 test_key, key = jrand.split(key, 2)
 
 env_keys = jrand.split(key, BATCHSIZE)
-print("Scores:", scores)
-print("Minimal Markowitz Order:", [int(o) for o in mM_order])
-best_global_num_muls = jnp.max(-jnp.array(scores))
-best_global_act_seq = None
+best_global_metric = {name: {} for name in NAMES}
+for name in NAMES:
+    scores = orders_scores[name]
+    fwd, rev, mM = scores["fwd_fmas"], scores["rev_fmas"], scores["mM_fmas"]
+    _best_glob_ret = jnp.max(-jnp.array([fwd, rev, mM]))
+    best_global_metric[name]["best_return"] = _best_glob_ret
+    best_global_metric[name]["act_seq"] = None
 
 buffer_state = replay_buffer.init(item_prototype)
 elim_order_table = wandb.Table(columns=["episode", "return", "elimination order"])

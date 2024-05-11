@@ -4,8 +4,10 @@ import jax.random as jrand
 
 from .vertexgame import (make_graph, get_graph_shape, forward, 
                         reverse, minimal_markowitz, cross_country)
-from graphax.examples import RoeFlux_1d, RoeFlux_3d, RobotArm_6DOF, f, g, Helmholtz
-from graphax.examples import Perceptron, HumanHeartDipole, PropaneCombustion, Encoder
+from graphax.examples import (RoeFlux_1d, RoeFlux_3d, RobotArm_6DOF, f, g, Helmholtz,
+                                Perceptron, HumanHeartDipole, PropaneCombustion, Encoder,
+                                BlackScholes_Jacobian)
+
 # TODO add Hessian and ViT examples
 
 
@@ -47,6 +49,7 @@ def make_RoeFlux_1d():
 
 
 def make_RoeFlux_3d():
+    batchsize = 1
     ul0 = jnp.array([.1])
     ul = jnp.array([.1, .2, .3])
     ul4 = jnp.array([.5])
@@ -54,7 +57,8 @@ def make_RoeFlux_3d():
     ur = jnp.array([.2, .2, .4])
     ur4 = jnp.array([.6])
     xs = (ul0, ul, ul4, ur0, ur, ur4)
-    return make_fn(RoeFlux_3d, *xs)
+    xs = [jnp.tile(x[jnp.newaxis, ...], (batchsize, 1)) for x in xs]
+    return make_fn(jax.vmap(RoeFlux_3d), *xs)
 
 
 def make_RobotArm_6DOF():
@@ -68,13 +72,15 @@ def make_f():
     b = jrand.uniform(key, (2, 3))
     c = jrand.uniform(key, (4, 4))
     d = jrand.uniform(key, (4, 1))
-    xs = [a, b, c, d]
+    xs = (a, b, c, d)
     return make_fn(f, *xs)
 
 
 def make_g():
-    xs = [.15]*15
-    return make_fn(g, *xs)
+    batchsize = 1
+    xs = [jnp.array([.15])]*15
+    xs = [jnp.tile(x[jnp.newaxis, ...], (batchsize, 1)) for x in xs]
+    return make_fn(jax.vmap(g), *xs)
 
 
 def make_Perceptron():
@@ -119,4 +125,9 @@ def make_Encoder():
     
     xs = (x, y, WQ1, WQ2, WK1, WK2, WV1, WV2, W1, W2, b1, b2, 0., 1., 0., 1.)
     return make_fn(Encoder, *xs)
+
+
+def make_BlackScholes_Jacobian():
+    xs = (1., 1., 1., 1., 1.)
+    return make_fn(BlackScholes_Jacobian, *xs)
 

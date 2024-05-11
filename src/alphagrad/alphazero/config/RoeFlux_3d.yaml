@@ -1,8 +1,8 @@
-task: "RobotArm_6DOF"
+task: "RoeFlux_3d"
 
 hyperparameters:
-  num_envs: 32 # this needs to be much larger probably
-  batchsize: 4096
+  num_envs: 16 # this needs to be much larger probably
+  batchsize: 2048
   episodes: 5000
   value_weight: 10.
   l2_weight: 0.0001
@@ -17,7 +17,7 @@ hyperparameters:
     lookback: 1
 
     qtransform: # clibration of qtransform very important for learning
-      value_scale: 0.01
-      maxvisit_init: 25
+      value_scale: 0.005
+      maxvisit_init: 30
       rescale_values: True
 

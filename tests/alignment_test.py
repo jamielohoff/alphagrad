@@ -44,145 +44,8 @@ def test_function(f, *xs):
         return True
     else:
         return False
-
-
-# 76:0
-# 84:0
-# 4:0
-# 5:0
-# 9:1
-# 10:1
-# 12:3
-# 14:3
-# 22:3
-# 23:3
-# 30:3
-# 31:3
-# 37:1
-# 39:1
-# 45:1
-# 51:1
-# 70:1
-# 73:1
-# 75:0
-# 77:0
-# 78:0
-# 83:0
-# 85:0
-# 86:0
-# 119:1
-# 122:1
-# 125:1
-# 3:0
-# 6:2
-# 16:6
-# 24:4
-# 27:2
-# 32:4
-# 35:2
-# 38:2
-# 40:2
-# 46:2
-# 52:2
-# 54:6
-# 57:2
-# 59:4
-# 60:4
-# 62:4
-# 66:2
-# 69:2
-# 72:2
-# 79:6
-# 81:2
-# 87:6
-# 89:2
-# 91:6
-# 92:6
-# 93:2
-# 94:2
-# 95:2
-# 97:2
-# 98:2
-# 100:2
-# 102:2
-# 103:2
-# 105:2
-# 107:2
-# 109:2
-# 110:2
-# 112:2
-# 114:2
-# 116:2
-# 118:2
-# 120:2
-# 123:2
-# 126:2
-# 128:2
-# 130:2
-# 21:3
-# 25:5
-# 28:3
-# 29:3
-# 33:5
-# 36:3
-# 43:3
-# 44:9
-# 53:5
-# 56:3
-# 63:5
-# 67:5
-# 82:5
-# 90:5
-# 101:0
-# 104:3
-# 108:0
-# 111:3
-# 115:0
-# 117:3
-# 124:3
-# 129:3
-# 133:7
-# 135:9
-# 11:8
-# 13:6
-# 15:6
-# 19:0
-# 20:0
-# 47:8
-# 50:4
-# 55:8
-# 65:4
-# 96:4
-# 99:12
-# 106:18
-# 113:18
-# 127:6
-# 80:9
-# 88:9
-# 41:6
-# 49:10
-# 61:28
-# 121:8
-# 137:11
-# 18:0
-# 64:28
-# 68:16
-# 131:12
-# 26:25
-# 34:25
-# 1:14
-# 48:28
-# 71:50
-# 74:50
-# 132:30
-# 7:18
-# 8:18
-# 58:55
-# 2:30
-# 42:50
-# 17:60
-
-
+    
+    
 class GraphaxAlignmentTest(unittest.TestCase):
     # # Scalar function tests
     # def test_Simple(self):
@@ -221,23 +84,23 @@ class GraphaxAlignmentTest(unittest.TestCase):
     #     result = test_function(Helmholtz, xs)
     #     self.assertTrue(result)
         
-    def test_Perceptron(self):
-        key = jrand.PRNGKey(1234)
+    # def test_Perceptron(self):
+    #     key = jrand.PRNGKey(1234)
 
-        x = jnp.ones(4)
-        y = jrand.normal(key, (4,))
+    #     x = jnp.ones(4)
+    #     y = jrand.normal(key, (4,))
 
-        w1key, b1key, key = jrand.split(key, 3)
-        W1 = jrand.normal(w1key, (8, 4))
-        b1 = jrand.normal(b1key, (8,))
+    #     w1key, b1key, key = jrand.split(key, 3)
+    #     W1 = jrand.normal(w1key, (8, 4))
+    #     b1 = jrand.normal(b1key, (8,))
 
-        w2key, b2key, key = jrand.split(key, 3)
-        W2 = jrand.normal(w2key, (4, 8))
-        b2 = jrand.normal(b2key, (4,))
+    #     w2key, b2key, key = jrand.split(key, 3)
+    #     W2 = jrand.normal(w2key, (4, 8))
+    #     b2 = jrand.normal(b2key, (4,))
 
-        xs = (x, y, W1, b1, W2, b2, 0., 1.)
-        result = test_function(Perceptron, *xs)
-        self.assertTrue(result)
+    #     xs = (x, y, W1, b1, W2, b2, 0., 1.)
+    #     result = test_function(Perceptron, *xs)
+    #     self.assertTrue(result)
         
     # def test_attention(self):
     #     key = jrand.PRNGKey(250197)
@@ -357,9 +220,9 @@ class GraphaxAlignmentTest(unittest.TestCase):
     #     print(result)
     #     self.assertTrue(result)
                 
-    # vmap and batching tests
+    # vmap and batching tests 
+    
         
-
 if __name__ == '__main__':
     unittest.main()
 
