@@ -8,11 +8,12 @@ hyperparameters:
   l2_weight: 0.0001
   lr: 0.001
   discount: 1.0
+  value_transform: "log"
 
   A0:
     gumbel_scale: 1.0
     num_considered_actions: 7
-    num_simulations: 100
+    num_simulations: 250
     replay_buffer_size: 50000 # too large of a replay buffer is not good
     lookback: 1
 

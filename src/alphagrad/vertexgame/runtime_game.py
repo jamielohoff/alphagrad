@@ -13,7 +13,6 @@ from .core import (vertex_eliminate,
                     get_vertex_mask, 
                     get_shape)
 from .interpreter import make_graph
-from .transforms import minimal_markowitz
     
 from graphax import jacve
 
@@ -66,16 +65,13 @@ class RuntimeGame:
         The `termination` of the game is indicated by the is_bipartite feature, i.e.
         the game is over when all intermediate vertices and edges have been eliminated.
         """
-        
         new_state, num_eliminated_vertices, num_intermediates, new_act_seq = _step(state, action)
-        
         terminated = lax.select(num_eliminated_vertices == num_intermediates, True, False)
         reward = self.reward_fn(act_seq=new_act_seq) if terminated else 0.0
-
         return new_state, reward*1., terminated
+        
     
-    
-@partial(jax.jit, donate_argnums=(0,))
+@partial(jax.jit, donate_argnums=(0,), device=jax.devices("cpu")[0])
 def _step(state, action):
     edges, act_seq = state
     idx = jnp.sum(jnp.where(act_seq > 0, 1, 0)).astype(jnp.int32)
@@ -101,7 +97,10 @@ def _get_reward(num_samples: int, f: Callable, *xs, act_seq=None) -> float:
         order = [int(a)+1 for a in act_seq] 
         
     argnums = list(range(len(xs)))
-    jac_fn = jax.jit(jacve(f, order=order, argnums=argnums))
+    # TODO: we need a vmap here to get better measurements!
+    vmap_f = jax.vmap(f)
+    xs = [jnp.stack([x]*512, axis=0) for x in xs]
+    jac_fn = jax.jit(jacve(vmap_f, order=order, argnums=argnums), device=jax.devices("cpu")[0])
     
     def measure_time(i, _):
         start = time.time()
@@ -111,5 +110,5 @@ def _get_reward(num_samples: int, f: Callable, *xs, act_seq=None) -> float:
         return i+1, end - start
     
     _, dts = lax.scan(measure_time, 0, jnp.zeros(num_samples))
-    return -dts[1:].mean()
+    return -dts[5:].mean()
 

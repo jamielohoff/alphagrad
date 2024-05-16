@@ -1,9 +1,49 @@
-tasks: ["RoeFlux_1d", "RoeFlux_3d", "RobotArm_6DOF", "g", "f", "Encoder", 
-        "Perceptron", "PropaneCombustion", "HumanHeartDipole"]
+scores:
+  HumanHeartDipole:
+    fwd_fmas: 240
+    rev_fmas: 172
+    mM_fmas: 194
+  PropaneCombustion:
+    fwd_fmas: 151
+    rev_fmas: 90
+    mM_fmas: 111
+  RoeFlux_1d:
+    fwd_fmas: 620
+    rev_fmas: 364
+    mM_fmas: 407
+  RoeFlux_3d:
+    fwd_fmas: 1556
+    rev_fmas: 979
+    mM_fmas: 938
+  RobotArm_6DOF:
+    fwd_fmas: 397
+    rev_fmas: 301
+    mM_fmas: 288
+  BlackScholes_Jacobian:
+    fwd_fmas: 497
+    rev_fmas: 454
+    mM_fmas: 337
+  g:
+    fwd_fmas: 632
+    rev_fmas: 566
+    mM_fmas: 451
+  f:
+    fwd_fmas: 17728
+    rev_fmas: 8859
+    mM_fmas: 12083
+  Encoder:
+    fwd_fmas: 135010
+    rev_fmas: 4688
+    mM_fmas: 51869
+  Perceptron: 
+    fwd_fmas: 7762
+    rev_fmas: 312
+    mM_fmas: 2233
+
 
 hyperparameters:
-  num_envs: 16 # this needs to be much larger probably
-  batchsize: 2048
+  num_envs: 32 # this needs to be much larger probably
+  batchsize: 4096
   episodes: 5000
   value_weight: 10.
   l2_weight: 0.0001
@@ -17,8 +57,8 @@ hyperparameters:
     replay_buffer_size: 50000 # too large of a replay buffer is not good
     lookback: 1
 
-    qtransform: # clibration of qtransform very important for learning
-      value_scale: 0.01
-      maxvisit_init: 25
+    qtransform: # clibration of qtransform is important for learning
+      value_scale: 0.005
+      maxvisit_init: 30
       rescale_values: True
 

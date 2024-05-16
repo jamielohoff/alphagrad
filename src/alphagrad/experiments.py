@@ -8,8 +8,6 @@ from graphax.examples import (RoeFlux_1d, RoeFlux_3d, RobotArm_6DOF, f, g, Helmh
                                 Perceptron, HumanHeartDipole, PropaneCombustion, Encoder,
                                 BlackScholes_Jacobian)
 
-# TODO add Hessian and ViT examples
-
 
 def make_benchmark_scores(graph):
     _, fwd_fmas = jax.jit(forward)(graph)
@@ -86,8 +84,8 @@ def make_g():
 def make_Perceptron():
     key = jrand.PRNGKey(1234)
 
-    x = jnp.ones(4)
-    y = jrand.normal(key, (4,))
+    x = jnp.ones((1,4))
+    y = jrand.normal(key, (1, 4))
 
     w1key, b1key, key = jrand.split(key, 3)
     W1 = jrand.normal(w1key, (8, 4))
@@ -98,7 +96,8 @@ def make_Perceptron():
     b2 = jrand.normal(b2key, (4,))
 
     xs = (x, y, W1, b1, W2, b2, 0., 1.)
-    return make_fn(Perceptron, *xs)
+    batched_Perceptron = jax.vmap(Perceptron, in_axes=(0, 0, None, None, None, None, None, None))
+    return make_fn(batched_Perceptron, *xs)
 
 
 def make_Encoder():
@@ -128,6 +127,6 @@ def make_Encoder():
 
 
 def make_BlackScholes_Jacobian():
-    xs = (1., 1., 1., 1., 1.)
-    return make_fn(BlackScholes_Jacobian, *xs)
+    xs = [jnp.ones((1, 1)) for _ in range(5)]
+    return make_fn(jax.vmap(BlackScholes_Jacobian), *xs)
 

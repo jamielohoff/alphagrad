@@ -83,6 +83,7 @@ ENTROPY_WEIGHT = 0. # parameters["entropy_weight"]
 VALUE_WEIGHT = parameters["value_weight"]
 L2_WEIGHT = parameters["l2_weight"] if args.L2 is None else args.L2
 DISCOUNT = parameters["discount"]
+VALUE_TF_NAME = parameters["value_transform"]
 
 NUM_ENVS = parameters["num_envs"]
 PER_DEVICE_NUM_ENVS = NUM_ENVS // jax.device_count("gpu")
@@ -99,7 +100,7 @@ LOOKBACK = parameters["A0"]["lookback"]
 
 ROLLOUT_LENGTH = int(graph.shape[2] - graph_shape[2])
 OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
-NUM_ACTIONS = graph.shape[-1] # ROLLOUT_LENGTH # TODO fix this
+NUM_ACTIONS = graph.shape[-1]
 
 run_config = {"seed": args.seed,
     			"entropy_weight": ENTROPY_WEIGHT, 
@@ -109,6 +110,7 @@ run_config = {"seed": args.seed,
                 "episodes": EPISODES, 
                 "num_envs": NUM_ENVS,
                 "batchsize": BATCHSIZE, 
+                "value_transform": VALUE_TF_NAME,
                 "gumbel_scale": GUMBEL_SCALE, 
                 "num_simulations": NUM_SIMULATIONS,
                 "num_considered_actions": NUM_CONSIDERED_ACTIONS,
@@ -161,11 +163,17 @@ def init_weight(model, init_fn, key):
 # Initialization could help with performance
 model = init_weight(model, init_fn, init_key)
 
-def value_transform(x):
-    return default_value_transform(x) # symlog(x) # 
-
-def inverse_value_transform(x):
-    return default_inverse_value_transform(x) # symexp(x) # 
+if VALUE_TF_NAME == "log":
+    # Stolen form DreamerV3
+	value_transform = symlog 
+	inverse_value_transform = symexp
+elif VALUE_TF_NAME == "default":
+    # Stolen from R2D2
+    value_transform = default_value_transform
+    inverse_value_transform = default_inverse_value_transform
+elif VALUE_TF_NAME == "identity":
+	value_transform = lambda x: x
+	inverse_value_transform = lambda x: x
 
 
 # Setup of the necessary functions for the tree search

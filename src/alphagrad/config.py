@@ -29,7 +29,7 @@ def setup_joint_experiment(path: str):
     package = "alphagrad.experiments"
     module = import_module(package)
     
-    task_fn_names = config["tasks"]
+    task_fn_names = list(config["scores"])
 
     graphs, graph_shapes, task_fns = [], [], []
   

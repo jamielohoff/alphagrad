@@ -8,6 +8,7 @@ hyperparameters:
   l2_weight: 0.0001
   lr: 0.001
   discount: 1.0
+  value_transform: "log"
 
   A0:
     gumbel_scale: 1.0
@@ -17,7 +18,7 @@ hyperparameters:
     lookback: 1
 
     qtransform: # clibration of qtransform very important for learning
-      value_scale: 0.01
-      maxvisit_init: 25
+      value_scale: 0.005
+      maxvisit_init: 30
       rescale_values: True
 

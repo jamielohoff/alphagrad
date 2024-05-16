@@ -280,6 +280,7 @@ def init_carry(keys):
 def rollout_fn(networks, rollout_length, init_carry, key):
     keys = jrand.split(key, rollout_length)
     policy_net, value_net = networks
+    
     def step_fn(state, key):
         mask = 1. - state.at[1, 0, :].get()
         net_key, next_net_key, act_key = jrand.split(key, 3)
@@ -372,12 +373,9 @@ def test_agent(network, rollout_length, keys):
     return best_return, best_act_seq, returns[:, 0]
 
 
-model_key, key = jrand.split(key, 2)
-model = (policy_net, value_net)
-
-
 # Define optimizer
 # TODO test L2 norm and stationary ADAM for better stability
+model = (policy_net, value_net)
 schedule = LR # optax.cosine_decay_schedule(LR, 5000, 0.)
 optim = optax.chain(optax.adam(schedule, b1=.9, eps=1e-7), 
                     optax.clip_by_global_norm(.5))

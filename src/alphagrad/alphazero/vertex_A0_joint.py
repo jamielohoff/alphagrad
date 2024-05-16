@@ -33,9 +33,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--name", type=str, 
                     default="Test", help="Name of the experiment.")
 
-parser.add_argument("--task", type=str,
-                    default="RoeFlux_1d", help="Name of the task to run.")
-
 parser.add_argument("--gpus", type=str, 
                     default="0,1", help="GPU ID's to use for training.")
 
@@ -61,26 +58,33 @@ key = jrand.PRNGKey(args.seed)
 print("CPU devices:", jax.devices("cpu"))
 print("GPU devices:", jax.devices("gpu"))
 
-
 config, graphs, graph_shapes, task_fns = setup_joint_experiment(args.config_path)
-NAMES = config["tasks"]
+NAMES = list(config["scores"].keys())
 
-max_graph = max(graphs, key=lambda x: x.shape[-1])
-max_graph_shape = max(graph_shapes, key=lambda x: x[1])
+max_graph_shape_i = max(graph_shapes, key=lambda x: x[0])
+max_graph_shape_vo = max(graph_shapes, key=lambda x: x[1])
+max_graph_shape_o = max(graph_shapes, key=lambda x: x[2])
+
+max_graph_shape = (int(max_graph_shape_i[0]), 
+                   int(max_graph_shape_vo[1]), 
+                   int(max_graph_shape_o[2]))
+print(max_graph_shape)
 
 GRAPH_REPO = []
-orders_scores = {}
+orders_scores = config["scores"]
 for name, graph in zip(NAMES, graphs):
     key, subkey = jrand.split(key, 2)
-    mM_order, scs = make_benchmark_scores(graph)
-    orders_scores[name] = {"order": mM_order, 
-                            "fwd_fmas":scs[0],
-                            "rev_fmas":scs[1],
-                            "mM_fmas":scs[2]}
+    print("embedding", name)
+    start_time = time.time()
     _graph = embed(subkey, graph, max_graph_shape)
+    print(max_graph_shape, graph.shape, _graph.shape)
+    print("embedding time", time.time() - start_time)
+        
     GRAPH_REPO.append(_graph)
     
 GRAPH_REPO = jnp.stack(GRAPH_REPO, axis=0)
+# move graph repo to CPU
+GRAPH_REPO = jax.device_put(GRAPH_REPO, jax.devices("cpu")[0])
 
 parameters = config["hyperparameters"]
 LR = parameters["lr"]
@@ -105,7 +109,7 @@ LOOKBACK = parameters["A0"]["lookback"]
 
 ROLLOUT_LENGTH = int(max_graph_shape[-2] - max_graph_shape[-1])
 OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
-NUM_ACTIONS = graph.shape[-1] # ROLLOUT_LENGTH # TODO fix this
+NUM_ACTIONS = int(GRAPH_REPO[0].shape[-1])
 
 run_config = {"seed": args.seed,
     			"entropy_weight": ENTROPY_WEIGHT, 
@@ -128,9 +132,9 @@ run_config = {"seed": args.seed,
 
 wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
             host="https://wandb.fz-juelich.de")
-wandb.init(entity="ja-lohoff", project="AlphaGrad", group=args.task, 
+wandb.init(entity="ja-lohoff", project="AlphaGrad", group="joint", 
            	mode=args.wandb, config=run_config)
-wandb.run.name = "A0_" + args.task + "_" + args.name
+wandb.run.name = "A0_joint_" + args.name
 
 
 key, model_key, init_key = jrand.split(key, 3)
@@ -200,18 +204,30 @@ pmap_evaluate = eqx.filter_pmap(eval,
 								donate="all")
 
 
-def make_init_carry(graph, key):
-    graphs = jnp.tile(graph[jnp.newaxis, ...], (PER_DEVICE_NUM_ENVS, LOOKBACK, 1, 1))
-    return (graphs, jnp.zeros(PER_DEVICE_NUM_ENVS), key)
+def make_init_carry(key):
+    keys = jrand.split(key, NUM_ENVS)
+    graphs, sample_idxs = [], []
+    for key in keys:
+        idx = jrand.choice(key, len(GRAPH_REPO)).astype(jnp.int32)
+        graphs.append(GRAPH_REPO[idx])
+        sample_idxs.append(idx)
+    graphs = jnp.stack(graphs, axis=0)
+    sample_idxs = jnp.array(sample_idxs)
+    
+    _shape = graphs.shape
+    graphs = graphs.reshape(jax.device_count("gpu"), PER_DEVICE_NUM_ENVS, *_shape[1:])
+    sample_idxs = sample_idxs.reshape(jax.device_count("gpu"), PER_DEVICE_NUM_ENVS)
+    zeros = jnp.zeros((jax.device_count("gpu"), PER_DEVICE_NUM_ENVS))
+    keys = jrand.split(key, jax.device_count("gpu"))
+    return (graphs, zeros, keys), sample_idxs
 
 
-def tree_search(graph, model, key):
-	init_carry = make_init_carry(graph, key)
+def tree_search(model, init_carry, key):
 	final_state, num_muls, data = env_interaction(model, init_carry)
 	return final_state, num_muls, data # postprocess_data(data)
 
 pmap_tree_search = eqx.filter_pmap(tree_search,
-                                   in_axes=(None, None, 0), 
+                                   in_axes=(None, 0, 0), 
 									axis_name="num_devices", 
 									devices=jax.devices("gpu"), 
 									donate="all")
@@ -226,7 +242,7 @@ opt_state = optim.init(eqx.filter(model, eqx.is_inexact_array))
 
 
 # Needed to reassemble data
-state_shape = (5, max_graph_shape[0]+NUM_ACTIONS+1, NUM_ACTIONS)
+state_shape = GRAPH_REPO[0].shape # (5, max_graph_shape[0]+NUM_ACTIONS+1, NUM_ACTIONS)
 state_idx = jnp.prod(jnp.array(state_shape))
 policy_idx = state_idx + NUM_ACTIONS
 reward_idx = int(policy_idx + 1)
@@ -272,13 +288,6 @@ end_idx = order_idx+graph.shape[-1]-int(max_graph_shape[2])
 
 @jax.jit
 @jax.vmap
-def _raw_values(data):
-	raw_values = data[:, -2].flatten()
-	return jnp.concatenate([data, raw_values[:, jnp.newaxis]], axis=-1)
-
-
-@jax.jit
-@jax.vmap
 def _compute_return(data):
 	def loop_fn(returns, reward):
 		return (reward + DISCOUNT*returns), reward + DISCOUNT*returns
@@ -287,34 +296,42 @@ def _compute_return(data):
 	_, returns = lax.scan(loop_fn, 0., rewards[::-1])
 	return jnp.concatenate([data, returns[::-1, jnp.newaxis]], axis=-1)
 
-
-@partial(jax.jit, static_argnums=(1,))
-@jax.vmap
-def _compute_bootstrap(data, lookahead: int = 5):
-	rewards = data[:, -3].flatten()
-	values = data[:, -2].flatten()
-	values = jnp.roll(values, -lookahead)
-	values = values.at[-lookahead:].set(0.)
-
-	n_step_return = rewards
-
-	for i in range(1, lookahead):
-		rew = jnp.roll(rewards, -i)
-		rew = rew.at[-i:].set(0.)
-		n_step_return += DISCOUNT**i*rew
-
-	n_step_return += DISCOUNT**5*values
-	return jnp.concatenate([data, n_step_return[:, jnp.newaxis]], axis=-1)
-
 compute_value_targets = _compute_return
 
 
-@jax.jit
-def get_best_act_seq(final_state, num_muls):
+# @jax.jit
+def get_best_act_seq(final_state, num_muls, sample_idxs):
+	num_muls = num_muls.flatten()
+	sample_idxs = sample_idxs.flatten()
 	act_seqs = final_state[:, :, 3, 0, 0:ROLLOUT_LENGTH].reshape(NUM_ENVS, -1)
-	best_num_muls = jnp.max(num_muls)
-	best_act_seq = act_seqs[jnp.argmax(num_muls).astype(jnp.int32)] # TODO fix indexing here!
-	return best_num_muls, best_act_seq
+
+	names_num_muls = {name: [] for name in NAMES}
+	names_act_seqs = {name: [] for name in NAMES}
+
+	for idx, n, act in zip(sample_idxs, num_muls, act_seqs):
+		sn = NAMES[idx]
+		names_num_muls[sn].append(n)
+		names_act_seqs[sn].append(act)
+		
+	best_perf = {name:{} for name in NAMES}
+	for name in NAMES:
+		if len(names_num_muls[name]) == 0:
+			best_perf[name]["best_num_muls"] = None
+			best_perf[name]["mean_num_muls"] = None
+			best_perf[name]["idx"] = None
+			best_perf[name]["act_seq"] = None
+			continue
+		_num_muls = jnp.stack(names_num_muls[name])
+		_act_seqs = jnp.stack(names_act_seqs[name])
+		best_num_muls = jnp.max(_num_muls)
+		idx = jnp.argmax(_num_muls)
+		best_act_seq = _act_seqs[idx]
+		best_perf[name]["best_num_muls"] = best_num_muls
+		best_perf[name]["mean_num_muls"] = jnp.mean(_num_muls)
+		best_perf[name]["idx"] = idx
+		best_perf[name]["act_seq"] = [int(a) for a in best_act_seq]
+		
+	return best_perf
 
 
 # Defining the training function
@@ -359,41 +376,48 @@ for name in NAMES:
     scores = orders_scores[name]
     fwd, rev, mM = scores["fwd_fmas"], scores["rev_fmas"], scores["mM_fmas"]
     _best_glob_ret = jnp.max(-jnp.array([fwd, rev, mM]))
-    best_global_metric[name]["best_return"] = _best_glob_ret
+    best_global_metric[name]["best_num_muls"] = _best_glob_ret
     best_global_metric[name]["act_seq"] = None
 
 buffer_state = replay_buffer.init(item_prototype)
-elim_order_table = wandb.Table(columns=["episode", "return", "elimination order"])
+elim_order_table = wandb.Table(columns=["episode", "num_muls", "elimination order"])
 
 for episode in pbar:
 	data_key, env_key, train_key, sample_key, key = jrand.split(key, 5)
 	data_keys = jrand.split(data_key, jax.device_count("gpu"))
 	train_keys = jrand.split(train_key, jax.device_count("gpu"))
- 
+
 	start_time = time.time()
-	final_state, num_muls, data = pmap_tree_search(graph, model, data_keys)
+	init_carry, sample_idxs = make_init_carry(key)
+	print("init carry time", time.time() - start_time)
+
+	start_time = time.time()
+	final_state, num_muls, data = pmap_tree_search(model, init_carry, data_keys)
 	print("tree search time", time.time() - start_time)
- 
-	# start_time = time.time()
+
 	data = jax.device_get(data)
 	data = data.reshape(NUM_ENVS, ROLLOUT_LENGTH, -1)
 	data = compute_value_targets(data)
-	# print("transfer time", time.time() - start_time)
  
 	final_state = jax.device_get(final_state)
 	num_muls = jax.device_get(num_muls)
-	best_num_muls, best_act_seq = get_best_act_seq(final_state, num_muls)
+	best_returns = get_best_act_seq(final_state, num_muls, sample_idxs)
  
-	if best_num_muls > best_global_num_muls:
-		best_global_num_muls = best_num_muls
-		best_global_act_seq = best_act_seq
-		print(f"New best return: {best_num_muls}")
-		vertex_elimination_order = [int(i) for i in best_act_seq]
-		print(f"New best action sequence: {vertex_elimination_order}")
-		# elim_order_table.add_data(episode, best_return, np.array(best_act_seq))
- 
+	for name in NAMES:
+        # print(best_returns[name]["best_return"], best_global_metric[name]["best_return"])
+		if best_returns[name]["best_num_muls"] is not None:
+			if best_returns[name]["best_num_muls"] > best_global_metric[name]["best_num_muls"]:
+				best_global_metric[name]["best_num_muls"] = best_returns[name]["best_num_muls"]
+				best_global_metric[name]["act_seq"] = best_returns[name]["act_seq"]
+				
+				_best_new_ret = best_returns[name]["best_num_muls"]
+				_best_new_act_seq = best_returns[name]["act_seq"]
+				
+				print(f"New best num_muls for {name}: {_best_new_ret}")
+				print(f"New best action sequence for {name}: {_best_new_act_seq}")
+			# elim_order_table.add_data(episode, best_return, np.array(best_act_seq))
+
 	samples, buffer_state = fill_and_sample(data, buffer_state, sample_key)
-	# TODO: Perform multiple training steps over the replay buffer
 	
 	start_time = time.time()
 	losses, aux, models, opt_states = train_agent(samples, model, opt_state, train_keys)
@@ -403,15 +427,18 @@ for episode in pbar:
 	aux = aux[0]
 	model = jtu.tree_map(select_first, models, is_leaf=eqx.is_inexact_array)
 	opt_state = jtu.tree_map(select_first, opt_states, is_leaf=eqx.is_inexact_array)
+ 
+	_best_ret = {"best_num_muls_" + name: int(best_returns[name]["best_num_muls"]) for name in NAMES}
+	_mean_ret = {"mean_num_muls_" + name: float(jnp.mean(best_returns[name]["best_num_muls"])) for name in NAMES}
 
-	wandb.log({"total loss": loss.tolist(),
+	wandb.log({**_best_ret,
+            	**_mean_ret,
+     			"total loss": loss.tolist(),
 				"policy loss": aux[0].tolist(),
 				"value loss": aux[1].tolist(),
 				"L2 loss": aux[2].tolist(),
 				"entropy loss": aux[3].tolist(),
-				"explained variance": aux[4].tolist(),
-				"best_return": best_num_muls, # TODO maybe change naming once the algorithm works
-    			"mean_return": jnp.mean(num_muls)})
+				"explained variance": aux[4].tolist()})
 
-	pbar.set_description(f"loss: {loss:.4f}, best_num_muls: {best_num_muls}, mean_num_muls: {jnp.mean(num_muls):.2f}")
+	pbar.set_description(f"loss: {loss:.4f}, {_best_ret}, {_mean_ret}")
 

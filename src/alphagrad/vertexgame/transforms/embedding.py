@@ -53,13 +53,16 @@ def embed(key: PRNGKey, edges: Array, new_shape: Sequence[int]) -> Array:
     
     i_diff = new_num_i - num_i
     vo_diff = new_num_vo - num_vo
-    if i_diff <= 0 or vo_diff <= 0:
+    print("shape", edges.shape)
+    if i_diff == 0 and vo_diff == 0:
         return edges
+    elif i_diff < 0 or vo_diff < 0:
+        raise ValueError(f"Graph of shape {edges.shape} to large to be embedded in shape{new_shape}!")
     
     le, re = jnp.split(edges, (num_i+1,), axis=1)
     edges = jnp.concatenate([le, jnp.zeros((5, i_diff, num_vo), dtype=jnp.int32), re], axis=1)
         
-    edges = jnp.pad(edges, ((0, 0), (0, vo_diff), (0, vo_diff)), mode='constant', constant_values=0)
+    edges = jnp.pad(edges, ((0, 0), (0, vo_diff), (0, vo_diff)), mode="constant", constant_values=0)
     edges = edges.at[1, 0, num_vo:].set(1)
         
     # Update edge state size to new size
