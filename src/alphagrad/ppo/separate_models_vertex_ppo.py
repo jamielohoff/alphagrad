@@ -376,7 +376,7 @@ def test_agent(network, rollout_length, keys):
 # Define optimizer
 # TODO test L2 norm and stationary ADAM for better stability
 model = (policy_net, value_net)
-schedule = LR # optax.cosine_decay_schedule(LR, 5000, 0.)
+schedule = optax.cosine_decay_schedule(LR, 5000, 0.)
 optim = optax.chain(optax.adam(schedule, b1=.9, eps=1e-7), 
                     optax.clip_by_global_norm(.5))
 opt_state = optim.init(eqx.filter(model, eqx.is_inexact_array))

@@ -58,7 +58,7 @@ def make_graph(f_jaxpr: Union[ClosedJaxpr, Callable], *xs: Array) -> Array:
             
     num_i = len(jaxpr.jaxpr._invars)
     num_o = len(jaxpr.jaxpr._outvars)
-    eqns = filter_eqns(jaxpr.eqns)
+    eqns = jaxpr.eqns # filter_eqns(jaxpr.eqns)
     num_v = len(eqns)
        
     edges = make_empty_edges([num_i, num_v, num_o])
@@ -84,6 +84,9 @@ def make_graph(f_jaxpr: Union[ClosedJaxpr, Callable], *xs: Array) -> Array:
             if str(outvar) not in variables:
                 variables[str(outvar)] = counter
                 counter += 1
+            elif str(outvar) == "_":
+                # How to deal with `non-computations`
+                counter += 1
                         
         # Resolves primitive and adds it to the edge representation matrix
         # print(i, eqn.outvars[0])
@@ -96,6 +99,7 @@ def make_graph(f_jaxpr: Union[ClosedJaxpr, Callable], *xs: Array) -> Array:
         num_i, num_vo = get_shape(edges)
         idx = variables[str(outvar)]
         if outvar in is_invar_list:
+            # TODO this behavior is not wanted!
             # Track which vertices are output vertices but also 
             # intermediate vertices. These are eliminated non-the-less, 
             # but we add an additional slice to the tensor with a copy-gradient 

@@ -75,6 +75,7 @@ print("GPU devices:", jax.devices("gpu"))
 
 config, graph, graph_shape, task_fn = setup_experiment(args.task, args.config_path)
 mM_order, scores = make_benchmark_scores(graph)
+print(graph.shape)
 
 parameters = config["hyperparameters"]
 LR = parameters["lr"]
@@ -411,7 +412,7 @@ for episode in pbar:
 				"L2 loss": aux[2].tolist(),
 				"entropy loss": aux[3].tolist(),
 				"explained variance": aux[4].tolist(),
-				"best_return": best_num_muls, # TODO maybe change naming once the algorithm works
+				"best_return": best_num_muls, # TODO: maybe change naming once the algorithm works
     			"mean_return": jnp.mean(num_muls)})
 
 	pbar.set_description(f"loss: {loss:.4f}, best_num_muls: {best_num_muls}, mean_num_muls: {jnp.mean(num_muls):.2f}")

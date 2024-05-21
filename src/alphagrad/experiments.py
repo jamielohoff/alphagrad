@@ -127,6 +127,6 @@ def make_Encoder():
 
 
 def make_BlackScholes_Jacobian():
-    xs = [jnp.ones((1, 1)) for _ in range(5)]
+    xs = [jnp.ones((1,)) for _ in range(5)]
     return make_fn(jax.vmap(BlackScholes_Jacobian), *xs)
 

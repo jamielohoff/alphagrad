@@ -18,11 +18,9 @@ import equinox as eqx
 from tqdm import tqdm
 
 from alphagrad.config import setup_joint_experiment
-from alphagrad.experiments import make_benchmark_scores
 from alphagrad.vertexgame import step, embed
 from alphagrad.alphazero.evaluate import evaluate
-from alphagrad.utils import (A0_loss, get_masked_logits, symlog, symexp, 
-							default_value_transform, default_inverse_value_transform)
+from alphagrad.utils import (A0_loss, get_masked_logits, symlog, symexp)
 from alphagrad.alphazero.environment_interaction import (make_recurrent_fn,
 														make_environment_interaction)
 from alphagrad.transformer.models import AlphaZeroModel
@@ -63,11 +61,10 @@ NAMES = list(config["scores"].keys())
 
 max_graph_shape_i = max(graph_shapes, key=lambda x: x[0])
 max_graph_shape_vo = max(graph_shapes, key=lambda x: x[1])
-max_graph_shape_o = max(graph_shapes, key=lambda x: x[2])
 
 max_graph_shape = (int(max_graph_shape_i[0]), 
                    int(max_graph_shape_vo[1]), 
-                   int(max_graph_shape_o[2]))
+                   int(max_graph_shape_vo[2]))
 print(max_graph_shape)
 
 GRAPH_REPO = []
@@ -83,7 +80,7 @@ for name, graph in zip(NAMES, graphs):
     GRAPH_REPO.append(_graph)
     
 GRAPH_REPO = jnp.stack(GRAPH_REPO, axis=0)
-# move graph repo to CPU
+# Move graph repo to CPU
 GRAPH_REPO = jax.device_put(GRAPH_REPO, jax.devices("cpu")[0])
 
 parameters = config["hyperparameters"]
@@ -107,7 +104,8 @@ REPLAY_BUFFER_SIZE = parameters["A0"]["replay_buffer_size"]
 QTRANSFORM_PARAMS = parameters["A0"]["qtransform"]
 LOOKBACK = parameters["A0"]["lookback"]
 
-ROLLOUT_LENGTH = int(max_graph_shape[-2] - max_graph_shape[-1])
+ROLLOUT_LENGTH = int(max_graph_shape[-2]-max_graph_shape[-1])
+print("ROLLOUT_LENGTH", ROLLOUT_LENGTH)
 OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
 NUM_ACTIONS = int(GRAPH_REPO[0].shape[-1])
 
@@ -138,7 +136,7 @@ wandb.run.name = "A0_joint_" + args.name
 
 
 key, model_key, init_key = jrand.split(key, 3)
-model = AlphaZeroModel(max_graph_shape, 64, 6, 6,
+model = AlphaZeroModel(max_graph_shape, 64, 8, 8,
 						ff_dim=256,
 						num_layers_policy=2,
 						policy_ff_dims=[256, 128],
@@ -224,7 +222,7 @@ def make_init_carry(key):
 
 def tree_search(model, init_carry, key):
 	final_state, num_muls, data = env_interaction(model, init_carry)
-	return final_state, num_muls, data # postprocess_data(data)
+	return final_state, num_muls, data
 
 pmap_tree_search = eqx.filter_pmap(tree_search,
                                    in_axes=(None, 0, 0), 
@@ -404,7 +402,6 @@ for episode in pbar:
 	best_returns = get_best_act_seq(final_state, num_muls, sample_idxs)
  
 	for name in NAMES:
-        # print(best_returns[name]["best_return"], best_global_metric[name]["best_return"])
 		if best_returns[name]["best_num_muls"] is not None:
 			if best_returns[name]["best_num_muls"] > best_global_metric[name]["best_num_muls"]:
 				best_global_metric[name]["best_num_muls"] = best_returns[name]["best_num_muls"]
@@ -428,8 +425,11 @@ for episode in pbar:
 	model = jtu.tree_map(select_first, models, is_leaf=eqx.is_inexact_array)
 	opt_state = jtu.tree_map(select_first, opt_states, is_leaf=eqx.is_inexact_array)
  
-	_best_ret = {"best_num_muls_" + name: int(best_returns[name]["best_num_muls"]) for name in NAMES}
-	_mean_ret = {"mean_num_muls_" + name: float(jnp.mean(best_returns[name]["best_num_muls"])) for name in NAMES}
+	_int = lambda x: int(x) if x is not None else None
+	_float = lambda x: float(jnp.mean(x)) if x is not None else None
+     
+	_best_ret = {"best_num_muls_" + name: _int(best_returns[name]["best_num_muls"]) for name in NAMES}
+	_mean_ret = {"mean_num_muls_" + name: _float(best_returns[name]["best_num_muls"]) for name in NAMES}
 
 	wandb.log({**_best_ret,
             	**_mean_ret,

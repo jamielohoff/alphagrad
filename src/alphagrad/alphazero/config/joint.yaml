@@ -20,9 +20,9 @@ scores:
     rev_fmas: 301
     mM_fmas: 288
   BlackScholes_Jacobian:
-    fwd_fmas: 497
-    rev_fmas: 454
-    mM_fmas: 337
+    fwd_fmas: 545
+    rev_fmas: 572
+    mM_fmas: 350
   g:
     fwd_fmas: 632
     rev_fmas: 566
@@ -36,9 +36,9 @@ scores:
     rev_fmas: 4688
     mM_fmas: 51869
   Perceptron: 
-    fwd_fmas: 7762
-    rev_fmas: 312
-    mM_fmas: 2233
+    fwd_fmas: 10930
+    rev_fmas: 392
+    mM_fmas: 4796
 
 
 hyperparameters:
@@ -58,7 +58,7 @@ hyperparameters:
     lookback: 1
 
     qtransform: # clibration of qtransform is important for learning
-      value_scale: 0.005
-      maxvisit_init: 30
+      value_scale: 0.01
+      maxvisit_init: 25
       rescale_values: True
 
