@@ -148,9 +148,9 @@ run_config = {"seed": args.seed,
                 "rev_runtime": rev_time, 
                 "cc_runtime": cc_time}
 
-wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
-            host="https://wandb.fz-juelich.de")
-wandb.init(entity="ja-lohoff", project="AlphaGrad", 
+wandb.login(key="redacted", 
+            host="redacted")
+wandb.init(entity="user", project="AlphaGrad", 
             group="Runtime_" + args.task, config=run_config,
             mode=args.wandb)
 wandb.run.name = "PPO_separate_networks_" + args.task + "_" + args.name

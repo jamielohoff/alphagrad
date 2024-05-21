@@ -26,7 +26,6 @@ from alphagrad.utils import (A0_loss, get_masked_logits, symlog, symexp,
 from alphagrad.alphazero.environment_interaction import (make_recurrent_fn,
 														make_environment_interaction)
 from alphagrad.transformer.models import AlphaZeroModel
-# from alphagrad.resnet.resnet import AlphaZeroModel
 
 
 # Roe Flux New best return: -323.0
@@ -125,9 +124,9 @@ run_config = {"seed": args.seed,
                 "rev_fmas": scores[1], 
                 "out_fmas": scores[2]}
 
-wandb.login(key="local-84c6642fa82dc63629ceacdcf326632140a7a899", 
-            host="https://wandb.fz-juelich.de")
-wandb.init(entity="ja-lohoff", project="AlphaGrad", group=args.task, 
+wandb.login(key="redacted", 
+            host="redacted")
+wandb.init(entity="user", project="AlphaGrad", group=args.task, 
            	mode=args.wandb, config=run_config)
 wandb.run.name = "A0_" + args.task + "_" + args.name
 

@@ -36,7 +36,7 @@ parser.add_argument("--scalar", type=int,
 args = parser.parse_args()
 
 
-API_KEY = "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"
+API_KEY = "redacted"
 PROMPT_LIST = get_prompt_list("./prompt_list.txt")    
 key = jrand.PRNGKey(args.seed)
 

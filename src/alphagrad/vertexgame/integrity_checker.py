@@ -74,9 +74,3 @@ def check_graphax_integrity(path):
             # print(f"Success rate fwd = {sum(fwd_successes)/len(fwd_successes)*100.:.2f}%")
             print(f"Success rate rev = {sum(rev_successes)/len(rev_successes)*100.:.2f}%")
         
-        
-        
-        
-                
-        
-
