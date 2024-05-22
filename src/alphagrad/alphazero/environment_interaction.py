@@ -22,16 +22,20 @@ def make_recurrent_fn(value_transform: Callable,
                     network: PyTreeDef,
                     step: Callable,
                     get_masked_logits: Callable) -> Callable:
-    """TODO write docstring
+    """Implementation of the recurrent function for tree searchas required by
+    the MuZero algorithm. The recurrent function is used to expand the tree
+    at the leaf node with a new node. The initial action probabilities will be
+    biased with the prediction from the neural network.
 
     Args:
-        nn_model (chex.PyTreeDef): _description_
-        num_intermediates (int): _description_
-        batched_step (Callable): _description_
-        batched_get_masked_logits (Callable): _description_
+        value_transform (Callable): Function to transform value for training
+        inverse_value_transform (Callable): Function to inverse transform value for prediction
+        network (chex.PyTreeDef): Neural network model
+        step (Callable): Environment dynamics function
+        get_masked_logits (Callable): Function that masks logits for invalid actions
 
     Returns:
-        Callable: _description_
+        Callable: Recurrent function for tree search
     """
     @partial(jax.vmap, in_axes=(None, None, 0, 0))
     def recurrent_fn(params, rng_key, actions, states):
@@ -74,8 +78,25 @@ def make_environment_interaction(value_transform: Callable,
                                 recurrent_fn: Callable,
                                 step: Callable,
                                 **kwargs) -> Callable:
-    """
-    TODO write docstring
+    """Implementation of the environment interaction function for the MuZero
+    algorithm. The environment interaction function is used to simulate the
+    environment and the agent's interaction with the environment. The agent
+    will interact with the environment by selecting actions based on the
+    policy derived from the tree search.
+    
+    Args:
+        value_transform (Callable): Function to transform value for training
+        inverse_value_transform (Callable): Function to inverse transform value for prediction
+        num_actions (int): Number of actions
+        num_considered_actions (int): Number of considered actions
+        gumbel_scale (int): Gumbel scale parameter
+        num_simulations (int): Number of simulations
+        recurrent_fn (Callable): Recurrent function for tree search
+        step (Callable): Environment dynamics function
+        **kwargs: Additional keyword arguments
+    
+    Returns:
+        Callable: Environment interaction function for the MuZero algorithm
     """
     qtransform = partial(mctx.qtransform_completed_by_mix_value, **kwargs)
     

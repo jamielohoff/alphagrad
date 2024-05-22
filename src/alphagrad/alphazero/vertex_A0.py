@@ -20,7 +20,6 @@ from tqdm import tqdm
 from alphagrad.config import setup_experiment
 from alphagrad.experiments import make_benchmark_scores
 from alphagrad.vertexgame import step
-from alphagrad.alphazero.evaluate import evaluate
 from alphagrad.utils import (A0_loss, get_masked_logits, symlog, symexp, 
 							default_value_transform, default_inverse_value_transform)
 from alphagrad.alphazero.environment_interaction import (make_recurrent_fn,
@@ -196,19 +195,13 @@ env_interaction = make_environment_interaction(value_transform,
 # Setup loss function
 loss_fn = partial(A0_loss, value_transform, inverse_value_transform)
 
-eval = partial(evaluate, env_interaction)
-pmap_evaluate = eqx.filter_pmap(eval,
-								in_axes=(None, 0 , None), 
-								axis_name="num_devices", 
-								devices=jax.devices("gpu"), 
-								donate="all")
-
 
 def make_init_carry(graph, key):
     graphs = jnp.tile(graph[jnp.newaxis, ...], (PER_DEVICE_NUM_ENVS, LOOKBACK, 1, 1))
     return (graphs, jnp.zeros(PER_DEVICE_NUM_ENVS), key)
 
 
+# Tree search function
 def tree_search(graph, model, key):
 	init_carry = make_init_carry(graph, key)
 	final_state, num_muls, data = env_interaction(model, init_carry)
@@ -248,6 +241,7 @@ replay_buffer = fbx.make_trajectory_buffer(max_length_time_axis=ROLLOUT_LENGTH,
 item_prototype =jnp.zeros(value_idx+2, device=jax.devices("cpu")[0])
 
 
+# Fill the replay buffer
 def fill_buffer(replay_buffer, buffer_state, samples):
 	updated_buffer_state = replay_buffer.add(buffer_state, samples)
 	return updated_buffer_state
@@ -276,41 +270,13 @@ end_idx = order_idx+graph.shape[-1]-int(graph_shape[2])
 
 @jax.jit
 @jax.vmap
-def _raw_values(data):
-	raw_values = data[:, -2].flatten()
-	return jnp.concatenate([data, raw_values[:, jnp.newaxis]], axis=-1)
-
-
-@jax.jit
-@jax.vmap
-def _compute_return(data):
+def compute_value_targets(data):
 	def loop_fn(returns, reward):
 		return (reward + DISCOUNT*returns), reward + DISCOUNT*returns
 
 	rewards = data[:, -3].flatten()
 	_, returns = lax.scan(loop_fn, 0., rewards[::-1])
 	return jnp.concatenate([data, returns[::-1, jnp.newaxis]], axis=-1)
-
-
-@partial(jax.jit, static_argnums=(1,))
-@jax.vmap
-def _compute_bootstrap(data, lookahead: int = 5):
-	rewards = data[:, -3].flatten()
-	values = data[:, -2].flatten()
-	values = jnp.roll(values, -lookahead)
-	values = values.at[-lookahead:].set(0.)
-
-	n_step_return = rewards
-
-	for i in range(1, lookahead):
-		rew = jnp.roll(rewards, -i)
-		rew = rew.at[-i:].set(0.)
-		n_step_return += DISCOUNT**i*rew
-
-	n_step_return += DISCOUNT**5*values
-	return jnp.concatenate([data, n_step_return[:, jnp.newaxis]], axis=-1)
-
-compute_value_targets = _compute_return
 
 
 @jax.jit
@@ -394,7 +360,6 @@ for episode in pbar:
 		# elim_order_table.add_data(episode, best_return, np.array(best_act_seq))
  
 	samples, buffer_state = fill_and_sample(data, buffer_state, sample_key)
-	# TODO: Perform multiple training steps over the replay buffer
 	
 	start_time = time.time()
 	losses, aux, models, opt_states = train_agent(samples, model, opt_state, train_keys)
@@ -411,7 +376,7 @@ for episode in pbar:
 				"L2 loss": aux[2].tolist(),
 				"entropy loss": aux[3].tolist(),
 				"explained variance": aux[4].tolist(),
-				"best_return": best_num_muls, # TODO: maybe change naming once the algorithm works
+				"best_return": best_num_muls,
     			"mean_return": jnp.mean(num_muls)})
 
 	pbar.set_description(f"loss: {loss:.4f}, best_num_muls: {best_num_muls}, mean_num_muls: {jnp.mean(num_muls):.2f}")

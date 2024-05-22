@@ -1,3 +1,4 @@
+from typing import Callable, Tuple
 import functools as ft
 
 import jax
@@ -12,11 +13,12 @@ import optax
 import equinox as eqx
 
 
-def symlog(x: Array) -> Array:
+# Taken from https://openreview.net/forum?id=r1lyTjAqYX
+def symlog(x: float) -> float:
     return jnp.sign(x)*jnp.log(jnp.abs(x)+1)
 
 
-def symexp(x: Array) -> Array:
+def symexp(x: float) -> float:
     return jnp.sign(x)*jnp.exp(jnp.abs(x)-1)  
 
 
@@ -30,12 +32,12 @@ def default_inverse_value_transform(x: Array, eps: float = 0.001) -> Array:
 
 
 # Definition of some RL metrics for diagnostics
-def explained_variance(value, empirical_return):
+def explained_variance(value, empirical_return) -> float:
     return 1. - jnp.var(value)/jnp.var(empirical_return)
 
 
 # Function to calculate the entropy of a probability distribution
-def entropy(prob_dist):
+def entropy(prob_dist: Array) -> float:
     return -jnp.sum(prob_dist*jnp.log(prob_dist + 1e-7), axis=-1)
 
 
@@ -51,21 +53,21 @@ def A0_loss_fn(value_transform,
 				entropy_weight,
 				key: PRNGKey):
 	"""Loss function as defined in AlphaZero paper with additional entropy
-	regularization to promote exploration
-
+	regularization to promote exploration.
 
 	Args:
-		network (_type_): _description_
-		policy_target (_type_): _description_
-		value_target (_type_): _description_
-		state (_type_): _description_
-		policy_weight (_type_): _description_
-		L2_weight (_type_): _description_
-		entropy_weight (_type_): _description_
-		key (PRNGKey): _description_
-
+		value_transform (Callable): Value transform function.
+		inverse_value_transform (Callable): Inverse value transform function.
+		network (Array): Transformer policy and value model.
+		policy_target (Array): Policy targets computed in the tree search.
+		value_target (Array): Value targets computed in the tree search.
+		state (Array): States from the environment.
+		policy_weight (Array): Weight of the policy loss.
+		L2_weight (Array): Weight of the L2 regularization.
+		entropy_weight (Array): Weight of the entropy regularization.
+		key (PRNGKey): Random key.
 	Returns:
-		_type_: _description_
+		Tuple: Returns loss function and auxiliary metrics.
 	"""
 	output = network(state, key=key)
 	policy_logits = output[1:]
@@ -73,13 +75,11 @@ def A0_loss_fn(value_transform,
 
 	policy_probs = jnn.softmax(policy_logits, axis=-1)
 
- 	# action_weights, i.e. policy_target are a probability distribution!
+ 	# Action_weights, i.e. policy_target used as prob. dist. targets!
 	policy_loss = optax.softmax_cross_entropy(policy_logits, policy_target)
 	entropy = optax.softmax_cross_entropy(policy_logits, policy_probs)
  
-	# Added symlog for reward scaling
-	# TODO: Gumbel MuZero found a cross entropy loss to be more stable for variable
-	# scale value targets
+	# Value targets are transformed with `value_transform`
 	value_loss = optax.l2_loss(value, value_transform(value_target[0]))
  
 	# Computing the L2 regularization
@@ -132,38 +132,27 @@ def get_masked_logits(logits, state):
 
 @ft.partial(jax.vmap, in_axes=(0,))
 def postprocess_data(data: Array) -> Array:
-	"""Function that computes the returns for certain steps appropriately.
+	"""Reverses the partial cumulative reward.
 
 	Args:
-		data (_type_): _description_ 
-
+		data (Array): Tree search output.
 	Returns:
-		_type_: _description_
+		data: Reversed cumulative reward.
 	"""
 	values = data[::-1, -3]
 	return data.at[:, -3].set(values)
 
 
-def make_init_state(edges, key):
+def make_init_state(graph: Array, key: PRNGKey) -> Tuple:
 	"""
-	TODO add docstring
-	"""
-	batchsize = edges.shape[0]
-	return (edges, jnp.zeros(batchsize), key)  
-
-
-def make_batch(edges, num_devices: int = 1) -> Array:
-	"""
-	TODO add docstring
-	"""
-	batchsize = edges.shape[0]
-	edges = edges.numpy().astype(jnp.int32)
-	edges = jnp.array(edges)
+	Function that creates the initial state for the tree search.
  
-	if num_devices > 1:
-		edges_shape = edges.shape[1:]
-		per_device_batchsize = batchsize // num_devices
-		edges = edges.reshape(num_devices, per_device_batchsize, *edges_shape)
-
-	return edges
+	Args:
+		graph (Array): Tree search input graph.
+		key (PRNGKey): Random key.
+	Returns:
+		Tuple: Initial state for the tree search.
+	"""
+	batchsize = graph.shape[0]
+	return (graph, jnp.zeros(batchsize), key)  
 

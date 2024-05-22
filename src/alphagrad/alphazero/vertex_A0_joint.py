@@ -19,8 +19,7 @@ from tqdm import tqdm
 
 from alphagrad.config import setup_joint_experiment
 from alphagrad.vertexgame import step, embed
-from alphagrad.alphazero.evaluate import evaluate
-from alphagrad.utils import (A0_loss, get_masked_logits, symlog, symexp)
+from alphagrad.utils import A0_loss, get_masked_logits, symlog, symexp
 from alphagrad.alphazero.environment_interaction import (make_recurrent_fn,
 														make_environment_interaction)
 from alphagrad.transformer.models import AlphaZeroModel
@@ -109,6 +108,7 @@ print("ROLLOUT_LENGTH", ROLLOUT_LENGTH)
 OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
 NUM_ACTIONS = int(GRAPH_REPO[0].shape[-1])
 
+# Setup weights and biases logging
 run_config = {"seed": args.seed,
     			"entropy_weight": ENTROPY_WEIGHT, 
                 "value_weight": VALUE_WEIGHT, 
@@ -143,8 +143,8 @@ model = AlphaZeroModel(max_graph_shape, 64, 8, 8,
 						value_ff_dims=[256, 128, 64], 
 						key=model_key)
 
-# model = AlphaZeroModel(5*LOOKBACK, NUM_ACTIONS, key=model_key)
 
+# Initialize the transformer model
 init_fn = jnn.initializers.orthogonal(jnp.sqrt(2))
 
 def init_weight(model, init_fn, key):
@@ -194,13 +194,6 @@ env_interaction = make_environment_interaction(value_transform,
 # Setup loss function
 loss_fn = partial(A0_loss, value_transform, inverse_value_transform)
 
-eval = partial(evaluate, env_interaction)
-pmap_evaluate = eqx.filter_pmap(eval,
-								in_axes=(None, 0 , None), 
-								axis_name="num_devices", 
-								devices=jax.devices("gpu"), 
-								donate="all")
-
 
 def make_init_carry(key):
     keys = jrand.split(key, NUM_ENVS)
@@ -220,6 +213,7 @@ def make_init_carry(key):
     return (graphs, zeros, keys), sample_idxs
 
 
+# Prepare the tree search function
 def tree_search(model, init_carry, key):
 	final_state, num_muls, data = env_interaction(model, init_carry)
 	return final_state, num_muls, data
@@ -258,6 +252,7 @@ replay_buffer = fbx.make_trajectory_buffer(max_length_time_axis=ROLLOUT_LENGTH,
 item_prototype =jnp.zeros(value_idx+2, device=jax.devices("cpu")[0])
 
 
+# Filling the replay buffer
 def fill_buffer(replay_buffer, buffer_state, samples):
 	updated_buffer_state = replay_buffer.add(buffer_state, samples)
 	return updated_buffer_state
@@ -297,7 +292,7 @@ def _compute_return(data):
 compute_value_targets = _compute_return
 
 
-# @jax.jit
+# Helper function to get the best action sequence and best reward
 def get_best_act_seq(final_state, num_muls, sample_idxs):
 	num_muls = num_muls.flatten()
 	sample_idxs = sample_idxs.flatten()
