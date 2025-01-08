@@ -10,7 +10,7 @@ The following packages are required to successfully run the algorithms.
 - optax
 - equinox
 - numpy, scipy, matplotlib
-- distrax from https://github.com/google-deepmind/distraxd
+- distrax from https://github.com/google-deepmind/distrax
 - flashbax from https://instadeepai.github.io/flashbax/
 - tqdm
 Finally, the Graphax package needs to be installed as well since it contains the
