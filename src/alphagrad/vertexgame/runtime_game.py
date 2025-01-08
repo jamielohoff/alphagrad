@@ -2,7 +2,7 @@ import time
 from functools import partial
 from typing import Callable, Tuple
 
-from multiprocessing import Process, Manager, set_start_method
+from multiprocessing import Pool, Process, Manager, set_start_method
 
 import jax
 import jax.lax as lax
@@ -149,74 +149,21 @@ def _get_reward2(num_samples: int, burnin: int, fn: Callable, *xs, act_seq=None)
         order = [int(a)+1 for a in act_seq] 
         
     argnums = list(range(len(xs)))
+    xs = [jnp.stack([x]*512) for x in xs]
     jac_fn = jacve(fn, order=order, argnums=argnums)
     
+    # We need to create a more realistic measurement setting!
     def measure_time(i, _):
-        jac = jac_fn(*xs)
+        jac = jax.vmap(jac_fn)(*xs)
         jax.block_until_ready(jac)
-        return i+1, None
+        return i+1, jac
     
     st = time.time()
-    _, dts = eqx.filter_jit(lax.scan, device=jax.devices("cpu")[0])(measure_time, 0, jnp.zeros(burnin))
+    _, dts = eqx.filter_jit(lax.scan, device=jax.devices("cpu")[0])(measure_time, 0, [jnp.zeros(1)]*burnin)
     print("compilation time:", time.time() - st)
     
     start = time.time()
-    _, dts = eqx.filter_jit(lax.scan, device=jax.devices("cpu")[0])(measure_time, 0, jnp.zeros(num_samples))
+    _, dts = eqx.filter_jit(lax.scan, device=jax.devices("cpu")[0])(measure_time, 0, [jnp.zeros(1)]*num_samples)
     end = time.time()
     return (start-end) / num_samples
-
-
-class RuntimeGameParallel:
-    env: RuntimeGame
-    num_envs: int
-
-    def __init__(self, num_envs: int, num_samples: int, fn: Callable, *xs, reward_scale: float = 1.) -> None:
-        self.num_envs = num_envs
-        self.env = RuntimeGame(num_samples, fn, *xs, reward_scale=reward_scale)
-        
-    def reset_envs(self) -> State:
-        obs, act_seq = self.env.reset()
-        init_obs = jnp.stack([obs for _ in range(self.num_envs)])
-        init_act_seq = jnp.stack([act_seq for _ in range(self.num_envs)])
-        return (init_obs, init_act_seq)
-        
-    def step_fn(self, i, state, action, return_dict) -> None:
-        return_dict[i] = self.env.step(state, action)        
-        
-    # Multi-processing step
-    def steps(self, states, actions):
-        st = time.time()
-        states = jax.device_put(states, jax.devices("cpu")[0])
-        actions = jax.device_put(actions, jax.devices("cpu")[0])
-        states = [(states[0][i], states[1][i]) for i in range(self.num_envs)]
-        print("allocation time:", time.time() - st)
-
-        st = time.time()
-        manager = Manager()
-        out, procs = manager.dict(), []
-        print("manager creation time:", time.time() - st)
-
-        st = time.time()
-        # Instantiating process with arguments
-        for i, (state, action) in enumerate(zip(states, actions)):
-            proc = Process(target=self.step_fn, args=(i, state, action, out))
-            procs.append(proc)
-            proc.start()
-        print("distribution and exectuion time:", time.time() - st)
-
-        st = time.time()
-        # Complete the processes
-        for proc in procs:
-            proc.join()
-        print("joining time:", time.time() - st)
-        
-        next_states, rewards, dones = zip(*out.values())
-        
-        next_obs, next_act_seqs = zip(*list(next_states))
-        next_states = (jnp.stack(list(next_obs)), jnp.stack(list(next_act_seqs)))
-        
-        rewards = jnp.array(list(rewards))
-        dones = jnp.array(list(dones))
-        
-        return next_states, rewards, dones
 

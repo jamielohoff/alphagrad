@@ -454,7 +454,6 @@ def cross_country(order: Sequence[int], edges: Array) -> Array:
                                 lambda e: (e, 0),
                                _edges)
         fmas += _fmas
-        # jax.debug.print("{v}:{fmas}", v=vertex, fmas=_fmas)
         carry = (_edges, fmas)
         return carry, _fmas
     vertices = jnp.array(order)
