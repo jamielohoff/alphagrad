@@ -1,4 +1,5 @@
 from typing import Sequence, Tuple
+import time
 
 import jax
 import jax.lax as lax
@@ -13,9 +14,13 @@ from chex import Array
 from alphagrad.vertexgame import make_graph
 from alphagrad.vertexgame.core import ADD_SPARSITY_MAP, MUL_SPARSITY_MAP, CONTRACTION_MAP
 
+
+# jax.config.update("jax_disable_jit", True)
+
+
 # The size of these buffers are the main bottleneck of the algorithm.
-IN_VAL_BUFFER_SIZE = 25
-OUT_VAL_BUFFER_SIZE = 25
+IN_VAL_BUFFER_SIZE = 10
+OUT_VAL_BUFFER_SIZE = 10
 
 
 def sparse_mul(in_jac: Array, out_jac: Array) -> Tuple[float, Array]:
@@ -41,11 +46,13 @@ def sparse_mul(in_jac: Array, out_jac: Array) -> Tuple[float, Array]:
     # Check how the contraction between incoming and outgoing Jacobian is done
     # and compute the resulting number of multiplications
     contraction_map = CONTRACTION_MAP[:, in_sparsity, out_sparsity]
+    factors = jnp.concatenate((out_jac[1:3], jnp.abs(out_jac[3:]), in_jac[3:]))
     masked_factors = lax.cond(jnp.sum(contraction_map) > 0,
                                 lambda a: jnp.where(contraction_map > 0, a, 1),
-                                lambda a: jnp.zeros(4), out_jac[1:])
+                                lambda a: jnp.zeros_like(a), 
+                                factors)
 
-    fmas = jnp.prod(in_jac[1:3])*jnp.prod(masked_factors)
+    fmas = jnp.prod(masked_factors)
     return fmas, jnp.concatenate([res_sparsity, in_jac[1:3], out_jac[3:]])
 
 
@@ -268,7 +275,7 @@ def make_new_edges(edge_combos: Array,
         is_valid_edge = jnp.logical_and(edge[0]>=0, edge[1]>=0)
         
         # Add the edge to the graph representation
-        # TODO use the correct number of n for a mixed size of senders and receivers
+        # TODO use the correct number of `n` for a mixed size of senders and receivers
         in_val = in_vals[n % IN_VAL_BUFFER_SIZE]
         out_val = out_vals[n // OUT_VAL_BUFFER_SIZE]
         carry = lax.cond(is_valid_edge, add_edge, id,
@@ -477,6 +484,8 @@ xs = [jnp.zeros((1,))]*6
 
 # F = RoeFlux_1d
 # xs = [jnp.ones((1,))]*6
+
+
 args = range(len(xs))
 dense_graph = make_graph(F, *xs)
 print(dense_graph.shape)
@@ -512,25 +521,24 @@ sparse_graph = GraphsTuple(nodes=nodes,
                             globals=jnp.array([[0.]]))
 
 
-import time
 from alphagrad.vertexgame import reverse as old_reverse
 from alphagrad.vertexgame.transforms import embed as old_embed
 
-# start = time.time()
-# embedded_graph = embed(150, 500, sparse_graph)
-# end = time.time()
-# print("jraph embedding", end-start)
 embedded_graph = sparse_graph
+# print("sparse_graph", sparse_graph)
 
+# TODO the sparse version of vertex elimination does not yield the correct number
+# of multiplications and additions
 start = time.time()
-out_graph, out = reverse(embedded_graph)
+out_graph, out = jax.jit(reverse)(embedded_graph)
 end = time.time()
 print("jraph reverse time jit", end-start, out_graph.globals)
 
 start = time.time()
-out_graph, out = reverse(embedded_graph)
+out_graph, out = jax.jit(reverse)(embedded_graph)
 end = time.time()
 print("jraph reverse time", end-start, out_graph.globals)
+# print("out_graph", out_graph)
 
 print([(int(i), int(j)) for i, j in zip(out[0], out[1])])
 
@@ -538,12 +546,151 @@ print([(int(i), int(j)) for i, j in zip(out[0], out[1])])
 # print("embedding takes time")
 # dense_graph = old_embed(key, dense_graph, [20, 150, 20])
 start = time.time()
-out_graph, nops = old_reverse(dense_graph)
+out_graph, nops = jax.jit(old_reverse)(dense_graph)
 end = time.time()
 print("alphagrad time jit", end-start, nops)
 
 start = time.time()
-out_graph, nops = old_reverse(dense_graph)
+out_graph, nops = jax.jit(old_reverse)(dense_graph)
 end = time.time()
 print("alphagrad time", end-start, nops)
+
+
+import equinox as eqx
+import jax.nn as jnn
+from typing import Callable, Sequence
+
+
+def add_self_edges_fn(receivers: jnp.ndarray, senders: jnp.ndarray,
+                      total_num_nodes: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """Adds self edges. Assumes self edges are not in the graph yet."""
+    receivers = jnp.concatenate((receivers, jnp.arange(total_num_nodes)), axis=0)
+    senders = jnp.concatenate((senders, jnp.arange(total_num_nodes)), axis=0)
+    return receivers, senders
+
+
+class EdgeGATLayer(eqx.Module):
+    edge_update: eqx.nn.Linear
+    node_update: eqx.nn.Linear
+    attn_logits: eqx.nn.Linear
+    
+    update_edge_fn: Callable
+    update_node_fn: Callable
+    attn_logit_fn: Callable
+    attn_reduce_fn: Callable
+    edge_gat_fn: Callable
+    
+    def __init__(self, edge_feature_shapes, node_feature_shapes, key):
+        edge_key, node_key, attn_key = jrand.split(key, 3)
         
+        in_edge_size = edge_feature_shapes[0] + 2*node_feature_shapes[0]
+        out_edge_size = edge_feature_shapes[1]
+        self.edge_update = eqx.nn.Linear(in_edge_size, out_edge_size, key=edge_key)
+        
+        in_node_size = 2*edge_feature_shapes[1] + node_feature_shapes[0]
+        out_node_size = node_feature_shapes[1]
+        self.node_update = eqx.nn.Linear(in_node_size, out_node_size, key=node_key)
+        
+        in_attn_size = edge_feature_shapes[1] + 2*node_feature_shapes[0]
+        self.attn_logits = eqx.nn.Linear(in_attn_size, 1, key=attn_key)
+        
+        self.edge_gat_fn = jraph.GraphNetGAT(
+            update_edge_fn=self.update_edge_fn, 
+            update_node_fn=self.update_node_fn,
+            attention_logit_fn=self.attn_logit_fn,
+            attention_reduce_fn=self.attn_reduce_fn,
+        )
+        
+    def update_edge_fn(self, edges, sent_attrs, recv_attrs, glob_attrs):
+        xs = jnp.concatenate((sent_attrs, recv_attrs, edges), axis=1)
+        out = jax.vmap(self.edge_update)(xs)
+        return jnn.leaky_relu(out)
+    
+    # This is where the edge-to-node aggregation happens
+    def update_node_fn(self, nodes, sent_attrs, recv_attrs, glob_attrs):
+        xs = jnp.concatenate((sent_attrs, recv_attrs, nodes), axis=1)
+        out = jax.vmap(self.node_update)(xs)
+        return jnn.leaky_relu(out)
+        
+    def attn_logit_fn(self, edges, sent_attrs, recv_attrs, glob_attrs):
+        xs = jnp.concatenate((sent_attrs, recv_attrs, edges), axis=1)
+        out = jax.vmap(self.attn_logits)(xs)
+        return jnn.leaky_relu(out)
+    
+    def attn_reduce_fn(self, edges, weights):
+        weighted_edges = edges*weights
+        return weighted_edges
+    
+    def __call__(self, graph: jraph.GraphsTuple):
+        return self.edge_gat_fn(graph)
+
+
+class EdgeGATNetwork(eqx.Module):
+    sparsity_embedding: eqx.nn.Embedding
+    op_type_embedding: eqx.nn.Embedding
+    
+    gat_layers: Sequence[EdgeGATLayer]
+    output_layer: eqx.nn.Linear
+    
+    def __init__(self, sparsity_embedding_size: int, op_type_embedding_size: int, 
+                edge_feature_shapes, node_feature_shapes, key):
+        assert len(edge_feature_shapes) == len(node_feature_shapes), "The number"\
+            "of `edge_feature_shapes` has to be equal the number of `node_feature_shapes`"
+        embed_key1, embed_key2, out_key = jrand.split(key, 3)
+        self.sparsity_embedding = eqx.nn.Embedding(22, sparsity_embedding_size, key=embed_key1)
+        self.op_type_embedding = eqx.nn.Embedding(10, op_type_embedding_size, key=embed_key2)
+        self.output_layer = eqx.nn.Linear(node_feature_shapes[-1], 1, key=out_key)
+        
+        keys = jrand.split(key, len(edge_feature_shapes))
+        self.gat_layers = []
+        self.gat_layers.append(EdgeGATLayer(
+                                (sparsity_embedding_size+4, edge_feature_shapes[0]), 
+                                (op_type_embedding_size, node_feature_shapes[0]),
+                                keys[0]))
+        
+        for i, ikey in enumerate(keys[1:]):
+            self.gat_layers.append(
+                EdgeGATLayer(
+                    (edge_feature_shapes[i], edge_feature_shapes[i+1]), 
+                    (node_feature_shapes[i], node_feature_shapes[i+1]),
+                    ikey
+                )
+            )
+            
+    def apply_sparsity_embedding(self, graph):
+        sparsity_embeddings = jax.vmap(self.sparsity_embedding)(11+graph.edges[:, 0])
+        embed_edges = jnp.concatenate([sparsity_embeddings, edges[:, 1:]], axis=-1)
+        return graph._replace(edges=embed_edges)
+    
+    def apply_op_type_embedding(self, graph):
+        embed_nodes = jax.vmap(self.op_type_embedding)(graph.nodes[:, 0])
+        return graph._replace(nodes=embed_nodes)
+    
+    def __call__(self, graph: jraph.GraphsTuple):
+        mask = graph.nodes
+        graph = self.apply_sparsity_embedding(graph)
+        graph = self.apply_op_type_embedding(graph)
+        
+        for gat_layer in self.gat_layers:
+            graph = gat_layer(graph)
+            
+        # TODO implement value function as well using the global attr?
+        nodes = jax.vmap(self.output_layer)(graph.nodes)
+        nodes = jnp.squeeze(nodes)
+        return jnp.where(jnp.squeeze(mask) > 0., -jnp.inf, nodes)
+
+
+key = jrand.PRNGKey(42)
+edge_gat_net = EdgeGATNetwork(4, 4, (32, 32, 32), (16, 16, 16), key)
+
+
+sparse_graph = sparse_graph._replace(
+    nodes=jnp.astype(sparse_graph.nodes[:, jnp.newaxis], jnp.int32),
+    edges=jnp.astype(sparse_graph.edges, jnp.int32),
+    senders=jnp.astype(sparse_graph.senders, jnp.int32),
+    receivers=jnp.astype(sparse_graph.receivers, jnp.int32),
+)
+
+logits = edge_gat_net(sparse_graph)
+print(jnn.softmax(logits))
+

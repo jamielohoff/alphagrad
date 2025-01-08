@@ -27,16 +27,6 @@ from alphagrad.alphazero.environment_interaction import (make_recurrent_fn,
 from alphagrad.transformer.models import AlphaZeroModel
 
 
-# Roe Flux New best return: -323.0
-# New best action sequence: 
-# [ 89  88  48  37  16  80  81   4  19  50  44  32   7  60  91  33  22  14
-# 25  61  27   6  15  93   5  45  77  83  39  12  92  79  75  53   2  69
-#  1  59  17  51  38  35  34   9   8  26  43  85  84  57  96  74  47  72
-# 66  71  78  73  76  82  87  67 100  54  95  42  90  21  94  46  86  55
-# 70  49  29  52  41  28  40  31  23  13   3  68  65  64  30  18  36  24
-# 56  63  58  10  11  62  20  98]
-
-
 parser = argparse.ArgumentParser()
 
 parser.add_argument("--name", type=str, 

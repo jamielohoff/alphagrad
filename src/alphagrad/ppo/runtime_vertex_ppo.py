@@ -326,7 +326,7 @@ def get_actions(policy_net, obs, key):
 # Implementation of the RL algorithm
 # @eqx.filter_jit
 # @partial(jax.vmap, in_axes=(None, None, 0, 0))
-# Painfully vmapped by hand
+# NOTE: Painfully vmapped by hand
 def rollout_fn(networks, rollout_length, init_carry, key):
     keys = jrand.split(key, rollout_length)
     policy_net, value_net = networks
@@ -477,7 +477,7 @@ if __name__ == '__main__':
         
         # Tracking different RL metrics
         wandb.log({"best_return": best_return,
-                "mean_return": jnp.mean(returns),
+                    "mean_return": jnp.mean(returns),
                     "KL divergence": kl_div,
                     "entropy evolution": policy_entropy,
                     "value function fit quality": fit_quality,
