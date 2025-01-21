@@ -9,8 +9,8 @@ def load_config(path: str):
     return config
 
 
-def setup_experiment(task: str, path: str):
-    config = load_config(os.path.join(path, task) + ".yaml")
+def setup_experiment(task: str, path: str, prefix: str = ""):
+    config = load_config(os.path.join(path, prefix+task) + ".yaml")
     
     # importing the make_function of the task and creating the graph from it
     package = "alphagrad.experiments"

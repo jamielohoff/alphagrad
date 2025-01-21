@@ -2,13 +2,10 @@ import time
 from functools import partial
 from typing import Callable, Tuple
 
-from multiprocessing import Pool, Process, Manager, set_start_method
-
 import jax
 import jax.lax as lax
 import jax.numpy as jnp
-
-import equinox as eqx
+import jax.random as jrand
 
 from chex import Array
 
@@ -33,25 +30,26 @@ class RuntimeGame:
     fn: Callable
     num_samples: int
     num_actions: int
+    batch_size: int
     burnin: int
     graph: Array
     reward_fn: Callable
     reward_scale: float
     
-    def __init__(self, num_samples: int, burnin: int, fn: Callable, *xs, reward_scale: float = 1.) -> None:
+    def __init__(self, batch_size: int, num_samples: int, burnin: int, fn: Callable, *xs, reward_scale: float = 1.) -> None:
         self.graph = make_graph(fn, *xs)
         self.fn = fn
         self.num_actions = self.graph.at[0, 0, 1].get()
         self.num_samples = num_samples
+        self.batch_size = batch_size
         self.burnin = burnin
-        self.reward_fn = partial(_get_reward2, num_samples, burnin, fn, *xs)
+        self.reward_fn = partial(_get_reward2, batch_size, num_samples, burnin, fn, *xs)
         self.reward_scale = reward_scale
     
     @partial(jax.jit, static_argnums=(0,))
     def reset(self) -> State:
         return (self.graph, jnp.zeros(self.num_actions, dtype=jnp.int32))
     
-    # @partial(jax.jit, static_argnums=(0,))
     def step(self, state: State, action: int) -> EnvOut:  
         """
         OpenAI gym-like environment for a game where to goal is to find the 
@@ -100,7 +98,7 @@ def _step(state: State, action: int) -> Tuple[State, Array, bool]:
     return new_state, new_act_seq, terminated
 
 
-def _get_reward(num_samples: int, burnin: int, fn: Callable, *xs, act_seq=None) -> float:
+def _get_reward(batch_size: int, num_samples: int, burnin: int, fn: Callable, *xs, act_seq=None) -> float:
     """_summary_
 
     Args:
@@ -131,7 +129,7 @@ def _get_reward(num_samples: int, burnin: int, fn: Callable, *xs, act_seq=None) 
     return -dts[burnin:].mean()
 
 
-def _get_reward2(num_samples: int, burnin: int, fn: Callable, *xs, act_seq=None) -> float:
+def _get_reward2(batch_size: int, num_samples: int, burnin: int, fn: Callable, *xs, act_seq=None) -> float:
     """_summary_
 
     Args:
@@ -149,21 +147,24 @@ def _get_reward2(num_samples: int, burnin: int, fn: Callable, *xs, act_seq=None)
         order = [int(a)+1 for a in act_seq] 
         
     argnums = list(range(len(xs)))
-    xs = [jnp.stack([x]*512) for x in xs]
     jac_fn = jacve(fn, order=order, argnums=argnums)
     
-    # We need to create a more realistic measurement setting!
-    def measure_time(i, _):
+    # TODO We need to create a more realistic measurement setting!
+    def measure_time(_, xs):
         jac = jax.vmap(jac_fn)(*xs)
         jax.block_until_ready(jac)
-        return i+1, jac
+        return _, jac
     
+    burnin_xs = [jnp.tile(x, (burnin, batch_size, 1)) for x in xs]
     st = time.time()
-    _, dts = eqx.filter_jit(lax.scan, device=jax.devices("cpu")[0])(measure_time, 0, [jnp.zeros(1)]*burnin)
+    _, dts = jax.jit(lax.scan, device=jax.devices("cpu")[0], static_argnums=0)(measure_time, None, burnin_xs)
     print("compilation time:", time.time() - st)
     
+    key = jrand.PRNGKey(42)
+    xs = [jrand.normal(key, (num_samples, batch_size) + x.shape) for x in xs]
     start = time.time()
-    _, dts = eqx.filter_jit(lax.scan, device=jax.devices("cpu")[0])(measure_time, 0, [jnp.zeros(1)]*num_samples)
+    _, dts = jax.jit(lax.scan, device=jax.devices("cpu")[0], static_argnums=0)(measure_time, None, xs)
     end = time.time()
+
     return (start-end) / num_samples
 

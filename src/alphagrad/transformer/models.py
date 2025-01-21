@@ -139,8 +139,8 @@ class PPOModel(eqx.Module):
         super().__init__()
         num_i, num_vo, num_o = graph_shape
         embed_key, token_key, proj_key, tf_key = jrand.split(key, 4)
-        self.embedding = eqx.nn.Conv2d(num_vo, num_vo, (5, 1), stride=(1, 1), key=embed_key)
-        self.projection = jrand.normal(proj_key, (num_i+num_vo, embedding_dim))
+        self.embedding = eqx.nn.Conv2d(num_vo, num_vo, (5, 1), use_bias=False, key=embed_key)
+        self.projection = eqx.nn.Linear(num_i+num_vo, embedding_dim, use_bias=False, key=proj_key)
         # self.output_token = jrand.normal(token_key, (num_i+num_vo, 1))
         self.transformer = SequentialTransformer(embedding_dim,
                                                 num_vo, 
@@ -159,7 +159,8 @@ class PPOModel(eqx.Module):
         edges = edges.astype(jnp.float32)
         
         embeddings = self.embedding(edges.transpose(2, 0, 1)).squeeze()
-        embeddings = jax.vmap(jnp.matmul, in_axes=(0, None))(embeddings, self.projection)
+        # embeddings = jax.vmap(jnp.matmul, in_axes=(0, None))(embeddings, self.projection)
+        embeddings = jax.vmap(self.projection, in_axes=0)(embeddings)
         return self.transformer(embeddings.T, mask=attn_mask, key=key)
     
     

@@ -1,0 +1,22 @@
+task: "RoeFlux_1d"
+
+runtime_measurements:
+  num_measurements: 100
+  measurement_batchsize: 128
+  measurement_burnin: 5
+  reward_scale: 1000
+
+hyperparameters:
+  num_envs: 32
+  episodes: 1500 # 5000
+  entropy_weight: 0.01
+  value_weight: 1.
+  lr: 0.00025
+
+  ppo:
+    clip_param: 0.2
+    gamma: 1.
+    gae_lambda: 0.95
+    num_minibatches: 4
+    rollout_length: 98
+

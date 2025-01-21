@@ -16,44 +16,19 @@ from tqdm import tqdm
 import wandb
 
 import distrax
-
 import optax
 import equinox as eqx
 
-import graphax as gx
+from multiprocessing import set_start_method, Pool
+
 from graphax.examples import RoeFlux_1d
 from alphagrad.utils import (entropy, explained_variance, symlog, symexp,
                             default_value_transform, default_inverse_value_transform)
 from alphagrad.vertexgame import forward, reverse, cross_country
-from alphagrad.vertexgame.runtime_game import RuntimeGame, _get_reward
+from alphagrad.vertexgame.runtime_game import RuntimeGame, _get_reward2
 from alphagrad.vertexgame.transforms import minimal_markowitz
-from alphagrad.transformer.models import PolicyNet, ValueNet
+from alphagrad.transformer.models import PPOModel
 from alphagrad.config import setup_experiment
-
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ["CUDA_VISIBLE_DEVICES"] = str(2)
-
-key = jrand.PRNGKey(250197)
-NUM_MEASUREMENTS = 100
-DEVICE = jax.devices("cpu")[0] # Change this to create hardware-aware algorithm
-FUNCTION = RoeFlux_1d
-xs = [.01, .02, .02, .01, .03, .03]
-xs = [jax.device_put(jnp.ones(1)*x, device=DEVICE) for x in xs]
-env = RuntimeGame(NUM_MEASUREMENTS, FUNCTION, *xs)
-
-
-_, fwd_fmas = forward(env.graph)
-_, rev_fmas = reverse(env.graph)
-mM_order = minimal_markowitz(env.graph, int(env.graph.at[0, 0, 1].get()))
-print("mM_order", [int(i) for i in mM_order])
-out, _ = cross_country(mM_order, env.graph)
-print("number of operations:", fwd_fmas, rev_fmas, out[1])
-
-act_seq = [i-1 for i in mM_order]
-cc_time = _get_reward(NUM_MEASUREMENTS, FUNCTION, *xs, act_seq=act_seq)
-fwd_time = _get_reward(NUM_MEASUREMENTS, FUNCTION, *xs, act_seq="fwd")
-rev_time = _get_reward(NUM_MEASUREMENTS, FUNCTION, *xs, act_seq="rev")
-print("runtimes:", fwd_time, rev_time, cc_time)
 
 parser = argparse.ArgumentParser()
 
@@ -78,33 +53,39 @@ parser.add_argument("--wandb", type=str,
 
 args = parser.parse_args()
 
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpus)
 key = jrand.PRNGKey(args.seed)
+model_key, init_key, key = jrand.split(key, 3)
 
-config, graph, graph_shape, task_fn = setup_experiment(args.task, args.config_path)
+
+config, graph, graph_shape, task_fn = setup_experiment(args.task, args.config_path, prefix="Runtime_")
 
 parameters = config["hyperparameters"]
 ENTROPY_WEIGHT = parameters["entropy_weight"]
 VALUE_WEIGHT = parameters["value_weight"]
 EPISODES = parameters["episodes"]
-NUM_ENVS = 8 #parameters["num_envs"]
+NUM_ENVS = parameters["num_envs"]
 LR = parameters["lr"]
 
 GAE_LAMBDA = parameters["ppo"]["gae_lambda"]
 EPS = parameters["ppo"]["clip_param"]
 MINIBATCHES = parameters["ppo"]["num_minibatches"]
 
-ROLLOUT_LENGTH = int(graph_shape[-2] - graph_shape[-1]) # parameters["ppo"]["rollout_length"]
+ROLLOUT_LENGTH = parameters["ppo"]["rollout_length"]
 OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
 NUM_ACTIONS = graph.shape[-1] # ROLLOUT_LENGTH # TODO fix this
 MINIBATCHSIZE = NUM_ENVS*ROLLOUT_LENGTH//MINIBATCHES
 
-policy_key, value_key = jrand.split(key, 2)
-# Larger models seem to help
-policy_net = PolicyNet(graph_shape, 64, 5, 6, ff_dim=256, mlp_dims=[256, 256], key=policy_key)
-value_net = ValueNet(graph_shape, 64, 4, 6, ff_dim=256, mlp_dims=[256, 128, 64], key=value_key)
-p_init_key, v_init_key = jrand.split(key, 2)
+# Make runtime measurements
+NUM_MEASUREMENTS = config["runtime_measurements"]["num_measurements"]
+BURNIN = config["runtime_measurements"]["measurement_burnin"]
+MEASUREMENT_BATCHSIZE = config["runtime_measurements"]["measurement_batchsize"]
+REWARD_SCALE = config["runtime_measurements"]["reward_scale"]
+DEVICE = jax.devices("cpu")[0] # Change this to create hardware-aware algorithm
+FUNCTION = RoeFlux_1d
+xs = [.01, .02, .02, .01, .03, .03]
+xs = [jax.device_put(jnp.ones(1)*x, device=DEVICE) for x in xs]
+env = RuntimeGame(MEASUREMENT_BATCHSIZE, NUM_MEASUREMENTS, BURNIN, FUNCTION, 
+                  *xs, reward_scale=REWARD_SCALE)
 
 init_fn = jnn.initializers.orthogonal(jnp.sqrt(2))
 
@@ -119,48 +100,35 @@ def init_weight(model, init_fn, key):
     weights = get_weights(model)
     biases = get_biases(model)
     new_weights = [init_fn(subkey, weight.shape)
-                    for weight, subkey in zip(weights, jax.random.split(key, len(weights)))]
+                    for weight, subkey in zip(weights, jrand.split(key, len(weights)))]
     new_biases = [jnp.zeros_like(bias) for bias in biases]
     new_model = eqx.tree_at(get_weights, model, new_weights)
     new_model = eqx.tree_at(get_biases, new_model, new_biases)
     return new_model
 
-
-# Initialization could help with performance
-policy_net = init_weight(policy_net, init_fn, p_init_key)
-value_net = init_weight(value_net, init_fn, v_init_key)
-
     
-run_config = {"seed": args.seed,
-                "entropy_weight": ENTROPY_WEIGHT, 
-                "value_weight": VALUE_WEIGHT, 
-                "lr": LR,
-                "episodes": EPISODES, 
-                "batchsize": NUM_ENVS, 
-                "gae_lambda": GAE_LAMBDA, 
-                "eps": EPS, 
-                "minibatches": MINIBATCHES, 
-                "minibatchsize": MINIBATCHSIZE, 
-                "obs_shape": OBS_SHAPE, 
-                "num_actions": NUM_ACTIONS, 
-                "rollout_length": ROLLOUT_LENGTH, 
-                "fwd_runtime": fwd_time, 
-                "rev_runtime": rev_time, 
-                "cc_runtime": cc_time}
-
-wandb.login(key="redacted", 
-            host="redacted")
-wandb.init(entity="user", project="AlphaGrad", 
-            group="Runtime_" + args.task, config=run_config,
-            mode=args.wandb)
-wandb.run.name = "PPO_separate_networks_" + args.task + "_" + args.name
+run_config = {
+    "seed": args.seed,
+    "entropy_weight": ENTROPY_WEIGHT, 
+    "value_weight": VALUE_WEIGHT, 
+    "lr": LR,
+    "episodes": EPISODES, 
+    "batchsize": NUM_ENVS, 
+    "gae_lambda": GAE_LAMBDA, 
+    "eps": EPS, 
+    "minibatches": MINIBATCHES, 
+    "minibatchsize": MINIBATCHSIZE, 
+    "obs_shape": OBS_SHAPE, 
+    "num_actions": NUM_ACTIONS, 
+    "rollout_length": ROLLOUT_LENGTH
+}
 
 
 # Value scaling functions
-def value_transform(x):
+def reward_normalization_fn(x):
     return x # default_value_transform(x) # symlog(x)
 
-def inverse_value_transform(x):
+def inverse_reward_normalization_fn(x):
     return x # default_inverse_value_transform(x) # symexp(x)
 
 
@@ -172,12 +140,12 @@ def get_num_clipping_triggers(ratio):
 
 
 @partial(jax.vmap, in_axes=(None, 0, 0, 0))
-def get_log_probs_and_value(networks, state, action, key):
-    policy_net, value_net = networks
+def get_log_probs_and_value(network, state, action, key):
     mask = 1. - state.at[1, 0, :].get()
-    logits = policy_net(state, key=key)
-    value = value_net(state, key=key)
-    prob_dist = jnn.softmax(logits, axis=-1, where=mask, initial=mask.max())
+    output = network(state, key=key)
+    value = output[0]
+    logits = output[1:]
+    prob_dist = jnn.softmax(logits, axis=-1, where=mask)
 
     log_prob = jnp.log(prob_dist[action] + 1e-7)
     return log_prob, prob_dist, value, entropy(prob_dist)
@@ -268,98 +236,110 @@ def scan(f, init, xs, length=None):
     return carry, jnp.stack(ys)
 
 
-from multiprocessing import Process, Manager
-
-def _step(i, state, action, return_dict):
-    return_dict[i] = env.step(state, action)
-
 # Multi-processing env_steps function for parallel compilation of different
 # vertex elimination orders
+def _init_envs(obs, act_seq):
+    """
+    Worker initializer to set up the global state.
+    """
+    global process_obs
+    global process_act_seq
+    process_obs = obs
+    process_act_seq = act_seq
+    
+    
+def reset_envs():
+    obs, act_seq = env.reset()
+    init_obs = jnp.stack([obs for _ in range(NUM_ENVS)])
+    init_act_seq = jnp.stack([act_seq for _ in range(NUM_ENVS)])
+    for _ in range(NUM_ENVS):
+        pool.apply_async(_init_envs, args=(obs, act_seq))
+    return (init_obs, init_act_seq)  
+    
+    
+def step_fn(i, obs, action):
+    return i, env.step(obs, action)
+
+    
+# Multi-processing step
 def env_steps(states, actions):
-    states = jax.device_put(states, jax.devices('cpu')[0])
-    actions = jax.device_put(actions, jax.devices('cpu')[0])
-    next_obs, next_act_seqs, rewards, dones = [], [], [], []
-    _states = [(states[0][i], states[1][i]) for i in range(NUM_ENVS)]
-
-    out = {i: env.step(_states[i], actions[i]) for i in range(NUM_ENVS)}
-
-    # manager = Manager()
-    # out = manager.dict()
+    states = jax.device_put(states, jax.devices("cpu")[0])
+    actions = jax.device_put(actions, jax.devices("cpu")[0])
+    states = [(states[0][i], states[1][i]) for i in range(NUM_ENVS)]
     
-    # procs = []
+    out = {}
+    jobs = [pool.apply_async(step_fn, args=(i, state, action)) 
+            for i, (state, action) in enumerate(zip(states, actions))]
 
-    # # instantiating process with arguments
-    # for i, (state, action) in enumerate(zip(_states, actions)):
-    #     print("starting")
-    #     proc = Process(target=_step, args=(i, state, action, out))
-    #     procs.append(proc)
-    #     proc.start()
-
-    # # complete the processes
-    # for proc in procs:
-    #     print("joining")
-    #     proc.join()
-    # print(out.values())
-    next_obs = [out[i][0][0] for i in range(NUM_ENVS)]
-    next_act_seqs = [out[i][0][1] for i in range(NUM_ENVS)]
-    rewards = [out[i][1] for i in range(NUM_ENVS)]
-    dones = [out[i][2] for i in range(NUM_ENVS)]
-    next_states = (jnp.stack(next_obs), jnp.stack(next_act_seqs))
+    # Collect results and maintain order
+    for job in jobs:
+        key, result = job.get()
+        out[key] = result
     
-    return next_states, jnp.array(rewards), jnp.array(dones)
+    next_states, rewards, dones = zip(*out.values())
+    
+    next_obs, next_act_seqs = zip(*list(next_states))
+    next_states = (jnp.stack(list(next_obs)), jnp.stack(list(next_act_seqs)))
+    
+    rewards = jnp.array(list(rewards))
+    dones = jnp.array(list(dones))
+    
+    return next_states, rewards, dones
 
-
+# Function to predict the actions from the neural network policy
 @eqx.filter_jit
 @partial(jax.vmap, in_axes=(None, 0, 0))
-def get_actions(policy_net, obs, key):
+def get_actions_and_values(network, obs, key):
     net_key, act_key = jrand.split(key, 2)
     mask = 1. - obs.at[1, 0, :].get()
     
-    logits = policy_net(obs, key=net_key)
-    prob_dist = jnn.softmax(logits, axis=-1, where=mask, initial=mask.max())
+    output = network(obs, key=net_key)
+    value = output[0]
+    logits = output[1:]
+    prob_dist = jnn.softmax(logits, axis=-1, where=mask)
     
     distribution = distrax.Categorical(probs=prob_dist)
     action = distribution.sample(seed=act_key)
-    return action, prob_dist
+    return action, prob_dist, value
 
 
 # Implementation of the RL algorithm
 # @eqx.filter_jit
 # @partial(jax.vmap, in_axes=(None, None, 0, 0))
 # NOTE: Painfully vmapped by hand
-def rollout_fn(networks, rollout_length, init_carry, key):
+def rollout_fn(network, rollout_length, init_carry, key):
     keys = jrand.split(key, rollout_length)
-    policy_net, value_net = networks
     
     def step_fn(states, key):
         obs, act_seqs = states
         next_net_key, key = jrand.split(key, 2)
         keys = jrand.split(key, NUM_ENVS)
-        actions, prob_dists = get_actions(policy_net, obs, keys)
+        actions, prob_dists, _ = get_actions_and_values(network, obs, keys)
         
         next_states, rewards, dones = env_steps(states, actions)
         next_obs, next_act_seqs = next_states
         discounts = 0.995*jnp.ones(NUM_ENVS) # TODO adjust this        
         
         next_net_keys = jrand.split(next_net_key, NUM_ENVS)
-        next_values = eqx.filter_jit(jax.vmap(value_net))(next_obs, key=next_net_keys)
+        _, _, next_values = get_actions_and_values(network, next_obs, next_net_keys)
         
-        new_sample = jnp.concatenate((obs.reshape(NUM_ENVS, -1),
-                                    actions[:, jnp.newaxis], 
-                                    rewards[:, jnp.newaxis], 
-                                    dones[:, jnp.newaxis],
-                                    next_obs.reshape(NUM_ENVS, -1), 
-                                    next_values[:, jnp.newaxis],
-                                    prob_dists, 
-                                    discounts[:, jnp.newaxis]), axis=1) # (sars')
+        new_sample = jnp.concatenate((
+            obs.reshape(NUM_ENVS, -1),
+            actions[:, jnp.newaxis], 
+            rewards[:, jnp.newaxis], 
+            dones[:, jnp.newaxis],
+            next_obs.reshape(NUM_ENVS, -1), 
+            next_values[:, jnp.newaxis],
+            prob_dists, 
+            discounts[:, jnp.newaxis]
+        ), axis=1) # (sars')
         return next_states, new_sample
     
     return scan(step_fn, init_carry, keys)
 
 
 # TODO Need better management of random seeds
-def loss(networks, trajectories, keys):
-    policy_net, value_net = networks
+def loss(network, trajectories, keys):
     state = trajectories[:, :OBS_SHAPE]
     state = state.reshape(-1, *graph.shape)
     actions = trajectories[:, OBS_SHAPE]
@@ -375,8 +355,8 @@ def loss(networks, trajectories, keys):
     returns = trajectories[:, 2*OBS_SHAPE+NUM_ACTIONS+6]
     advantages = trajectories[:, 2*OBS_SHAPE+NUM_ACTIONS+7]
     
-    log_probs, prob_dist, values, entropies = get_log_probs_and_value(networks, state, actions, keys)
-    next_values = jax.vmap(value_net)(next_state, keys)
+    log_probs, prob_dist, values, entropies = get_log_probs_and_value(network, state, actions, keys)
+    _, _, next_values, _ = get_log_probs_and_value(network, next_state, actions, keys)
     norm_adv = (advantages - jnp.mean(advantages)) / (jnp.std(advantages) + 1e-7)
     
     # Losses
@@ -389,10 +369,10 @@ def loss(networks, trajectories, keys):
     clipping_objective = jnp.minimum(ratio*norm_adv, jnp.clip(ratio, 1.-EPS, 1.+EPS)*norm_adv)
     ppo_loss = jnp.mean(-clipping_objective)
     entropy_loss = jnp.mean(entropies)
-    value_loss = .5*jnp.mean((values - value_transform(returns))**2)
+    value_loss = jnp.mean((values - reward_normalization_fn(returns))**2)
     
     # Metrics
-    dV = returns - rewards - discounts*inverse_value_transform(next_values) # assess fit quality
+    dV = returns - rewards - discounts*inverse_reward_normalization_fn(next_values) # assess fit quality
     fit_quality = jnp.mean(jnp.abs(dV))
     explained_var = explained_variance(advantages, returns)
     kl_div = jnp.mean(optax.kl_divergence(jnp.log(prob_dist + 1e-7), old_prob_dist))
@@ -405,17 +385,18 @@ def loss(networks, trajectories, keys):
 
 
 @eqx.filter_jit
-def train_agent(networks, opt_state, trajectories, keys):  
-    grads, metrics = eqx.filter_grad(loss, has_aux=True)(networks, trajectories, keys)   
+def train_agent(network, opt_state, trajectories, keys):  
+    grads, metrics = eqx.filter_grad(loss, has_aux=True)(network, trajectories, keys)   
     updates, opt_state = optim.update(grads, opt_state)
-    networks = eqx.apply_updates(networks, updates)
-    return networks, opt_state, metrics
+    network = eqx.apply_updates(network, updates)
+    return network, opt_state, metrics
 
 
 def test_agent(network, rollout_length, keys):
     env_carry = init_carry(keys)
     _, trajectories = rollout_fn(network, rollout_length, env_carry, keys[0])
     returns = get_returns(trajectories)
+    print(returns)
     best_return = jnp.max(returns[:, 0], axis=-1)
     idx = jnp.argmax(returns[:, 0], axis=-1)
     best_act_seq = trajectories[idx, :, OBS_SHAPE]
@@ -423,9 +404,57 @@ def test_agent(network, rollout_length, keys):
 
 
 if __name__ == '__main__':
+    os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpus)
+    
+    with open("../../../wandb_key.txt") as f:
+        wandb_key = f.readline()
+    wandb.login(key=wandb_key, 
+                host="https://wandb.fz-juelich.de")
+    wandb.init(entity="ja-lohoff", project="AlphaGrad", 
+                group="Runtime_" + args.task, config=run_config,
+                mode=args.wandb)
+    wandb.run.name = "PPO_runtime_" + args.task + "_" + args.name
+
+    _, fwd_fmas = forward(env.graph)
+    _, rev_fmas = reverse(env.graph)
+    mM_order = minimal_markowitz(env.graph, int(env.graph.at[0, 0, 1].get()))
+    print("mM_order", [int(i) for i in mM_order])
+    _, cc_fmas = cross_country(mM_order, env.graph)
+    print("number of operations:", fwd_fmas, rev_fmas, cc_fmas)
+
+    # NOTE: We need to fix the elimination orders here
+    act_seq = [i-1 for i in mM_order]
+    runtimes = partial(_get_reward2, MEASUREMENT_BATCHSIZE, NUM_MEASUREMENTS, BURNIN, FUNCTION, *xs)
+    cc_time = runtimes(act_seq=act_seq)
+    fwd_time = runtimes(act_seq="fwd")
+    rev_time = runtimes(act_seq="rev")
+    print("runtimes:", fwd_time, rev_time, cc_time)
+    
+    # Creating the model
+    model = PPOModel(
+        graph_shape, 64, 6, 8,
+        ff_dim=256,
+        num_layers_policy=2,
+        policy_ff_dims=[256, 256],
+        value_ff_dims=[256, 128, 64], 
+        key=key
+    )
+    
+    # Initialization could help with performance
+    model = init_weight(model, init_fn, init_key)
+    
+    # Set up the multiprocessing pool
+    # NOTE: It is imperative to choose "spawn" as starting method!
+    set_start_method("spawn")
+    
+    pool = Pool(
+        processes=NUM_ENVS,
+        initializer=_init_envs,
+        initargs=(None, None)  # Placeholder for state initialization
+    )
     # Define optimizer
     # TODO test L2 norm and stationary ADAM for better stability
-    model = (policy_net, value_net)
     schedule = LR # optax.cosine_decay_schedule(LR, 5000, 0.)
     optim = optax.chain(optax.adam(schedule, b1=.9, eps=1e-7), 
                         optax.clip_by_global_norm(.5))
@@ -476,18 +505,20 @@ if __name__ == '__main__':
             # elim_order_table.add_data(episode, best_return, np.array(best_act_seq))
         
         # Tracking different RL metrics
-        wandb.log({"best_return": best_return,
-                    "mean_return": jnp.mean(returns),
-                    "KL divergence": kl_div,
-                    "entropy evolution": policy_entropy,
-                    "value function fit quality": fit_quality,
-                    "explained variance": explained_var,
-                    "sample count": samplecounts,
-                    "ppo loss": ppo_loss,
-                    "value loss": value_loss,
-                    "entropy loss": entropy_loss,
-                    "total loss": total_loss,
-                    "clipping trigger ratio": clipping_trigger_ratio})
+        wandb.log({
+            "best_return": best_return,
+            "mean_return": jnp.mean(returns),
+            "KL divergence": kl_div,
+            "entropy evolution": policy_entropy,
+            "value function fit quality": fit_quality,
+            "explained variance": explained_var,
+            "sample count": samplecounts,
+            "ppo loss": ppo_loss,
+            "value loss": value_loss,
+            "entropy loss": entropy_loss,
+            "total loss": total_loss,
+            "clipping trigger ratio": clipping_trigger_ratio
+        })
             
         pbar.set_description(f"entropy: {policy_entropy:.4f}, best_return: {best_return}, mean_return: {jnp.mean(returns)}, fit_quality: {fit_quality:.2f}, expl_var: {explained_var:.4f}, kl_div: {kl_div:.4f}")
             
