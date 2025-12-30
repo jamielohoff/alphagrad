@@ -1,7 +1,8 @@
 import sys
-from .vertexgame import (step, make_graph, forward, reverse, cross_country,
-                        make_random_code, safe_preeliminations, clean, compress, 
-                        embed, minimal_markowitz, sparsify, densify, get_graph_shape)
+import sys
+from .vertexgame import (clean, compress, cross_country, embed,
+                        forward, get_graph_shape, make_graph, minimal_markowitz,
+                        reverse, safe_preeliminations, step)
 
 if sys.version_info[:2] >= (3, 8):
     # TODO: Import directly (no need for conditional) when `python_requires = >= 3.8`

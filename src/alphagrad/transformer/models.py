@@ -1,18 +1,15 @@
 from typing import Sequence
 
 import jax
-import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jrand
 
-from chex import Array, PRNGKey
 import equinox as eqx
-from equinox import static_field
 
-from alphagrad.transformer import MLP
-from alphagrad.transformer import Encoder
-from alphagrad.transformer import PositionalEncoder
+from alphagrad.transformer import Encoder, MLP, PositionalEncoder
 
+Array = jax.Array
+PRNGKey = jax.random.PRNGKey
 
 class GraphEmbedding(eqx.Module):
     embedding: eqx.nn.Conv2d
@@ -20,18 +17,19 @@ class GraphEmbedding(eqx.Module):
     # output_token: Array
     
     def __init__(self, 
-                graph_shape: Sequence[int],
-                embedding_dim: int,
-                key: PRNGKey = None,
-                **kwargs) -> None:
+        graph_shape: Sequence[int],
+        embd_dim: int,
+        key: PRNGKey = None,
+    ) -> None:
         super().__init__()
         num_i, num_vo, num_o = graph_shape
         embed_key, token_key, proj_key = jrand.split(key, 3)
         kernel_size, stride = 1, 1
-        self.embedding = eqx.nn.Conv2d(num_vo, num_vo, (5, kernel_size), 
-                                        stride=(1, stride), key=embed_key)
+        self.embedding = eqx.nn.Conv2d(
+            num_vo, num_vo, (5, kernel_size), stride=(1, stride), key=embed_key
+        )
         conv_size = (num_i+num_vo-kernel_size) // stride+1
-        self.projection = jrand.normal(proj_key, (conv_size, embedding_dim))
+        self.projection = jrand.normal(proj_key, (conv_size, embd_dim))
         # self.output_token = jrand.normal(token_key, (num_i+num_vo, 1))
     
     def __call__(self, graph: Array, key: PRNGKey = None) -> Array:
@@ -59,40 +57,46 @@ class SequentialTransformer(eqx.Module):
     # global_token_mask_x: Array = static_field()
     # global_token_mask_y: Array = static_field()
     
-    def __init__(self, 
-                in_dim: int,
-                seq_len: int,
-                num_layers: int,
-                num_heads: int,
-                ff_dim: int = 1024,
-                num_layers_policy: int = 2,
-                policy_ff_dims: Sequence[int] = [512, 256],
-                value_ff_dims: Sequence[int] = [1024, 512],
-                key: PRNGKey = None) -> None:
+    def __init__(
+        self, 
+        embd_dim: int,
+        seq_len: int,
+        num_layers: int,
+        num_heads: int,
+        hidden_dim: int = 1024,
+        num_policy_layers: int = 2,
+        policy_hidden_dims: Sequence[int] = [512, 256],
+        value_hidden_dims: Sequence[int] = [1024, 512],
+        key: PRNGKey = None
+    ) -> None:
         super().__init__()  
         self.num_heads = num_heads      
         e_key, p_key, pe_key, v_key, t_key = jrand.split(key, 5)
         
         # Here we use seq_len + 1 because of the global class token
-        self.pos_enc = PositionalEncoder(in_dim, seq_len)
+        self.pos_enc = PositionalEncoder(embd_dim, seq_len)
         
-        self.encoder = Encoder(num_layers=num_layers,
-                                num_heads=num_heads,
-                                in_dim=in_dim,
-                                ff_dim=ff_dim,
-                                key=e_key)
+        self.encoder = Encoder(
+            num_layers=num_layers,
+            num_heads=num_heads,
+            embd_dim=embd_dim,
+            hidden_dim=hidden_dim,
+            key=e_key
+        )
         
-        self.policy_enc = Encoder(num_layers=num_layers_policy,
-                                num_heads=num_heads,
-                                in_dim=in_dim,
-                                ff_dim=ff_dim,
-                                key=pe_key)
+        self.policy_enc = Encoder(
+            num_layers=num_policy_layers,
+            num_heads=num_heads,
+            embd_dim=embd_dim,
+            hidden_dim=hidden_dim,
+            key=pe_key
+        )
         
-        # self.global_token = jrand.normal(t_key, (in_dim, 1))
+        # self.global_token = jrand.normal(t_key, (embd_dim, 1))
         # self.global_token_mask_x = jnp.ones((seq_len, 1))
         # self.global_token_mask_y = jnp.ones((1, seq_len+1))
-        self.policy_head = MLP(in_dim, 1, policy_ff_dims, key=p_key)
-        self.value_head = MLP(in_dim, 1, value_ff_dims, key=v_key)
+        self.policy_head = MLP(embd_dim, 1, policy_hidden_dims, key=p_key)
+        self.value_head = MLP(embd_dim, 1, value_hidden_dims, key=v_key)
         
         
     def __call__(self, xs: Array, mask: Array = None, key: PRNGKey = None) -> Array:
@@ -108,15 +112,15 @@ class SequentialTransformer(eqx.Module):
 
         # Replicate mask and apply encoder
         if mask is not None:
-            mask = mask.T
+            mask = mask.T #  TODO fix this weird thing here
             mask = jnp.tile(mask[jnp.newaxis, :, :], (self.num_heads, 1, 1))
             xs = self.encoder(xs, mask=mask, key=e_key)
-            policy_embedding = xs # self.policy_enc(xs, mask=mask, key=p_key)
         else: 
             xs = self.encoder(xs, mask=None, key=e_key)
-            policy_embedding = xs # self.policy_enc(xs, mask=None, key=p_key)
         # global_token_xs = xs[0]
         values = jax.vmap(self.value_head)(xs)
+        
+        # similar to Global Average Pooling in ViTs
         value = jnp.mean(values)
         
         policy = jax.vmap(self.policy_head)(xs)
@@ -129,25 +133,24 @@ class PPOModel(eqx.Module):
     # output_token: Array
     transformer: SequentialTransformer
     
-    def __init__(self, 
-                graph_shape: Sequence[int],
-                embedding_dim: int,
-                num_layers: int,
-                num_heads: int,
-                key: PRNGKey = None,
-                **kwargs) -> None:
+    def __init__(
+        self, 
+        graph_shape: Sequence[int],
+        embd_dim: int,
+        num_layers: int,
+        num_heads: int,
+        key: PRNGKey = None,
+        **kwargs
+    ) -> None:
         super().__init__()
         num_i, num_vo, num_o = graph_shape
         embed_key, token_key, proj_key, tf_key = jrand.split(key, 4)
-        self.embedding = eqx.nn.Conv2d(num_vo, num_vo, (5, 1), use_bias=False, key=embed_key)
-        self.projection = eqx.nn.Linear(num_i+num_vo, embedding_dim, use_bias=False, key=proj_key)
+        self.embedding = eqx.nn.Conv2d(num_vo, num_vo, (5, 1), key=embed_key)
+        self.projection = eqx.nn.Linear(num_i+num_vo, embd_dim, key=proj_key)
         # self.output_token = jrand.normal(token_key, (num_i+num_vo, 1))
-        self.transformer = SequentialTransformer(embedding_dim,
-                                                num_vo, 
-                                                num_layers, 
-                                                num_heads, 
-                                                key=tf_key, 
-                                                **kwargs)
+        self.transformer = SequentialTransformer(
+            embd_dim, num_vo, num_layers, num_heads, key=tf_key, **kwargs
+        )
     
     def __call__(self, xs: Array, key: PRNGKey = None) -> Array:
         output_mask = xs.at[2, 0, :].get()
@@ -170,28 +173,28 @@ class AlphaZeroModel(eqx.Module):
     # output_token: Array
     transformer: SequentialTransformer
     
-    def __init__(self, 
-                graph_shape: Sequence[int],
-                embedding_dim: int,
-                num_layers: int,
-                num_heads: int,
-                key: PRNGKey = None,
-                **kwargs) -> None:
+    def __init__(
+        self, 
+        graph_shape: Sequence[int],
+        embd_dim: int,
+        num_layers: int,
+        num_heads: int,
+        key: PRNGKey = None,
+        **kwargs
+    ) -> None:
         super().__init__()
         num_i, num_vo, num_o = graph_shape
         embed_key, token_key, proj_key, tf_key = jrand.split(key, 4)
         kernel_size, stride = 3, 2
-        self.embedding = eqx.nn.Conv2d(num_vo, num_vo, (5, kernel_size), 
-                                        stride=(1, stride), key=embed_key)
+        self.embedding = eqx.nn.Conv2d(
+            num_vo, num_vo, (5, kernel_size), stride=(1, stride), key=embed_key
+        )
         conv_size = (num_i+num_vo-kernel_size) // stride+1
-        self.projection = jrand.normal(proj_key, (conv_size, embedding_dim))
+        self.projection = jrand.normal(proj_key, (conv_size, embd_dim))
         # self.output_token = jrand.normal(token_key, (num_i+num_vo, 1))
-        self.transformer = SequentialTransformer(embedding_dim,
-                                                num_vo, 
-                                                num_layers, 
-                                                num_heads, 
-                                                key=tf_key, 
-                                                **kwargs)
+        self.transformer = SequentialTransformer(
+            embd_dim, num_vo, num_layers, num_heads, key=tf_key, **kwargs
+        )
     
     def __call__(self, xs: Array, key: PRNGKey = None) -> Array:
         output_mask = xs.at[2, 0, :].get()
@@ -214,30 +217,34 @@ class PolicyNet(eqx.Module):
     encoder: Encoder
     head: MLP
     
-    def __init__(self, 
-                graph_shape: Sequence[int],
-                in_dim: int,
-                num_layers: int,
-                num_heads: int,
-                ff_dim: int = 1024,
-                mlp_dims: Sequence[int] = [512, 256],
-                key: PRNGKey = None) -> None:
+    def __init__(
+        self, 
+        graph_shape: Sequence[int],
+        embd_dim: int,
+        num_layers: int,
+        num_heads: int,
+        hidden_dim: int = 1024,
+        mlp_dims: Sequence[int] = [512, 256],
+        key: PRNGKey = None
+    ) -> None:
         super().__init__()     
         num_i, num_vo, num_o = graph_shape
         self.num_heads = num_heads
         encoder_key, embed_key, key = jrand.split(key, 3)
-        self.embedding = GraphEmbedding(graph_shape, in_dim, key=embed_key)
+        self.embedding = GraphEmbedding(graph_shape, embd_dim, key=embed_key)
         
         # Here we use seq_len + 1 because of the global class token
-        self.pos_enc = PositionalEncoder(in_dim, num_vo)
+        self.pos_enc = PositionalEncoder(embd_dim, num_vo)
         
-        self.encoder = Encoder(num_layers=num_layers,
-                                num_heads=num_heads,
-                                in_dim=in_dim,
-                                ff_dim=ff_dim,
-                                key=encoder_key)
+        self.encoder = Encoder(
+            num_layers=num_layers,
+            num_heads=num_heads,
+            embd_dim=embd_dim,
+            hidden_dim=hidden_dim,
+            key=encoder_key
+        )
 
-        self.head = MLP(in_dim, 1, mlp_dims, key=key)
+        self.head = MLP(embd_dim, 1, mlp_dims, key=key)
         
     def __call__(self, graph: Array, key: PRNGKey = None) -> Array:  
         # Embed the input graph
@@ -264,33 +271,37 @@ class ValueNet(eqx.Module):
     # global_token_mask_x: Array = static_field()
     # global_token_mask_y: Array = static_field()
     
-    def __init__(self, 
-                graph_shape: Sequence[int],
-                in_dim: int,
-                num_layers: int,
-                num_heads: int,
-                ff_dim: int = 1024,
-                mlp_dims: Sequence[int] = [1024, 512],
-                key: PRNGKey = None) -> None:
+    def __init__(
+        self, 
+        graph_shape: Sequence[int],
+        embd_dim: int,
+        num_layers: int,
+        num_heads: int,
+        hidden_dim: int = 1024,
+        mlp_dims: Sequence[int] = [1024, 512],
+        key: PRNGKey = None
+    ) -> None:
         super().__init__()    
         num_i, num_vo, num_o = graph_shape  
         self.num_heads = num_heads 
         embedding_key, encoder_key, token_key, key = jrand.split(key, 4)
-        self.embedding = GraphEmbedding(graph_shape, in_dim, key=embedding_key)
+        self.embedding = GraphEmbedding(graph_shape, embd_dim, key=embedding_key)
         
         # Here we use seq_len + 1 because of the global class token
-        self.pos_enc = PositionalEncoder(in_dim, num_vo)
+        self.pos_enc = PositionalEncoder(embd_dim, num_vo)
         
-        self.encoder = Encoder(num_layers=num_layers,
-                                num_heads=num_heads,
-                                in_dim=in_dim,
-                                ff_dim=ff_dim,
-                                key=encoder_key)
+        self.encoder = Encoder(
+            num_layers=num_layers,
+            num_heads=num_heads,
+            embd_dim=embd_dim,
+            hidden_dim=hidden_dim,
+            key=encoder_key
+        )
         
-        # self.global_token = jrand.normal(token_key, (in_dim, 1))
+        # self.global_token = jrand.normal(token_key, (embd_dim, 1))
         # self.global_token_mask_x = jnp.ones((num_vo, 1))
         # self.global_token_mask_y = jnp.ones((1, num_vo+1))
-        self.head = MLP(in_dim, 1, mlp_dims, key=key)
+        self.head = MLP(embd_dim, 1, mlp_dims, key=key)
         
     def __call__(self, graph: Array, key: PRNGKey = None) -> Array:
         # Embed the input graph
@@ -310,7 +321,4 @@ class ValueNet(eqx.Module):
         values = jax.vmap(self.head)(xs)
         
         return jnp.mean(values)
-    
-    
-# TODO test ResNet
 

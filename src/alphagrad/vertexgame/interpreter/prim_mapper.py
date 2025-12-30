@@ -1,12 +1,11 @@
 import jax
-import jax.nn as jnn
 import jax.lax as lax
 import jax.numpy as jnp
 
 from jax._src.core import Var
 
 
-vertex_registry = {}
+vertex_registry = dict()
 
 
 def get_shape(var: Var):
@@ -105,6 +104,7 @@ vertex_registry[lax.acosh_p] = add_mono_vertex
 vertex_registry[lax.atanh_p] = add_mono_vertex
 
 vertex_registry[lax.integer_pow_p] = add_mono_vertex
+vertex_registry[lax.square_p] = add_mono_vertex
 vertex_registry[lax.sqrt_p] = add_mono_vertex
 vertex_registry[lax.rsqrt_p] = add_mono_vertex
 vertex_registry[lax.logistic_p] = add_mono_vertex
@@ -206,6 +206,8 @@ vertex_registry[lax.div_p] = add_bi_vertex
 vertex_registry[jax._src.ad_util.add_any_p] = add_bi_vertex
 # vertex_registry[jax.ad.add_jaxvals_p] = add_bi_vertex
 vertex_registry[lax.eq_p] = add_bi_vertex
+vertex_registry[lax.max_p] = add_bi_vertex
+vertex_registry[lax.min_p] = add_bi_vertex
 vertex_registry[lax.pow_p] = add_bi_vertex
 
 

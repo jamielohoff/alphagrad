@@ -7,16 +7,14 @@ import jax.lax as lax
 import jax.numpy as jnp
 import jax.random as jrand
 
-from chex import Array
+from graphax import jacve
 
-from .core import (vertex_eliminate, 
-                    get_elimination_order, 
-                    get_vertex_mask, 
+from .core import (vertex_eliminate, get_elimination_order, get_vertex_mask, 
                     get_shape)
 from .interpreter import make_graph
     
-from graphax import jacve
 
+Array = jax.Array
 State = Tuple[Array, Array]
 EnvOut = Tuple[State, float, bool]
 
@@ -36,14 +34,16 @@ class RuntimeGame:
     reward_fn: Callable
     reward_scale: float
     
-    def __init__(self, batch_size: int, num_samples: int, burnin: int, fn: Callable, *xs, reward_scale: float = 1.) -> None:
+    def __init__(self, batch_size: int, num_samples: int, burnin: int, 
+                 fn: Callable, *xs, reward_scale: float = 1.) -> None:
         self.graph = make_graph(fn, *xs)
         self.fn = fn
         self.num_actions = self.graph.at[0, 0, 1].get()
         self.num_samples = num_samples
         self.batch_size = batch_size
         self.burnin = burnin
-        self.reward_fn = partial(_get_reward2, batch_size, num_samples, burnin, fn, *xs)
+        self.reward_fn = partial(_get_reward2, batch_size, num_samples, burnin, 
+                                 fn, *xs)
         self.reward_scale = reward_scale
     
     @partial(jax.jit, static_argnums=(0,))
@@ -72,9 +72,9 @@ class RuntimeGame:
         The `terminated` of the game is indicated by the is_bipartite feature, i.e.
         the game is over when all intermediate vertices and edges have been eliminated.
         """
-        new_state, new_act_seq, terminated = _step(state, action)
+        new_state, new_act_seq, terminated, nops = _step(state, action)
         reward = self.reward_fn(act_seq=new_act_seq) if terminated else 0.0
-        return new_state, reward*self.reward_scale, terminated
+        return new_state, reward*self.reward_scale, terminated, nops
         
     
 @partial(jax.jit, donate_argnums=(0,), device=jax.devices("cpu")[0])
@@ -95,10 +95,11 @@ def _step(state: State, action: int) -> Tuple[State, Array, bool]:
     new_act_seq = act_seq.at[idx].set(action)
     new_state = (new_edges, new_act_seq)
     terminated = num_eliminated_vertices == num_intermediates
-    return new_state, new_act_seq, terminated
+    return new_state, new_act_seq, terminated, nops
 
 
-def _get_reward(batch_size: int, num_samples: int, burnin: int, fn: Callable, *xs, act_seq=None) -> float:
+def _get_reward(batch_size: int, num_samples: int, burnin: int, fn: Callable, 
+                *xs, act_seq=None) -> float:
     """_summary_
 
     Args:
@@ -129,7 +130,8 @@ def _get_reward(batch_size: int, num_samples: int, burnin: int, fn: Callable, *x
     return -dts[burnin:].mean()
 
 
-def _get_reward2(batch_size: int, num_samples: int, burnin: int, fn: Callable, *xs, act_seq=None) -> float:
+def _get_reward2(batch_size: int, num_samples: int, burnin: int, fn: Callable, 
+                 *xs, act_seq=None) -> float:
     """_summary_
 
     Args:
@@ -151,17 +153,18 @@ def _get_reward2(batch_size: int, num_samples: int, burnin: int, fn: Callable, *
     
     # TODO We need to create a more realistic measurement setting!
     def measure_time(_, xs):
-        jac = jax.vmap(jac_fn)(*xs)
+        jac = jac_fn(*xs)
         jax.block_until_ready(jac)
         return _, jac
     
-    burnin_xs = [jnp.tile(x, (burnin, batch_size, 1)) for x in xs]
+    burnin_xs = [jnp.stack([x]*burnin, axis=0) for x in xs]
+    print([x.shape for x in burnin_xs])
     st = time.time()
     _, dts = jax.jit(lax.scan, device=jax.devices("cpu")[0], static_argnums=0)(measure_time, None, burnin_xs)
     print("compilation time:", time.time() - st)
     
     key = jrand.PRNGKey(42)
-    xs = [jrand.normal(key, (num_samples, batch_size) + x.shape) for x in xs]
+    xs = [jrand.normal(key, (num_samples,) + x.shape) for x in xs]
     start = time.time()
     _, dts = jax.jit(lax.scan, device=jax.devices("cpu")[0], static_argnums=0)(measure_time, None, xs)
     end = time.time()

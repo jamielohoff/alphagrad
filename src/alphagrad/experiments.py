@@ -2,11 +2,10 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrand
 
+import graphax.examples as examples
+
 from .vertexgame import (make_graph, get_graph_shape, forward, 
                         reverse, minimal_markowitz, cross_country)
-from graphax.examples import (RoeFlux_1d, RoeFlux_3d, RobotArm_6DOF, f, g, Helmholtz,
-                                Perceptron, HumanHeartDipole, PropaneCombustion, Encoder,
-                                BlackScholes_Jacobian)
 
 
 def make_benchmark_scores(graph):
@@ -28,22 +27,22 @@ def make_fn(fn, *xs):
 
 def make_Helmholtz():
     xs = [jnp.array([.05, .15, .15, 0.2])]
-    return make_fn(Helmholtz, *xs)
+    return make_fn(examples.Helmholtz, *xs)
 
 
 def make_HumanHeartDipole():
     xs = [.15]*8
-    return make_fn(HumanHeartDipole, *xs)
+    return make_fn(examples.HumanHeartDipole, *xs)
 
 
 def make_PropaneCombustion():
     xs = [.15]*11
-    return make_fn(PropaneCombustion, *xs)
+    return make_fn(examples.PropaneCombustion, *xs)
 
 
 def make_RoeFlux_1d():
     xs = [.01, .02, .02, .01, .03, .03]
-    return make_fn(RoeFlux_1d, *xs)
+    return make_fn(examples.RoeFlux_1d, *xs)
 
 
 def make_RoeFlux_3d():
@@ -56,12 +55,12 @@ def make_RoeFlux_3d():
     ur4 = jnp.array([.6])
     xs = (ul0, ul, ul4, ur0, ur, ur4)
     xs = [jnp.tile(x[jnp.newaxis, ...], (batchsize, 1)) for x in xs]
-    return make_fn(jax.vmap(RoeFlux_3d), *xs)
+    return make_fn(jax.vmap(examples.RoeFlux_3d), *xs)
 
 
 def make_RobotArm_6DOF():
     xs = [.02]*6
-    return make_fn(RobotArm_6DOF, *xs)
+    return make_fn(examples.RobotArm_6DOF, *xs)
 
 
 def make_f():
@@ -71,14 +70,14 @@ def make_f():
     c = jrand.uniform(key, (4, 4))
     d = jrand.uniform(key, (4, 1))
     xs = (a, b, c, d)
-    return make_fn(f, *xs)
+    return make_fn(examples.f, *xs)
 
 
 def make_g():
     batchsize = 1
     xs = [jnp.array([.15])]*15
     xs = [jnp.tile(x[jnp.newaxis, ...], (batchsize, 1)) for x in xs]
-    return make_fn(jax.vmap(g), *xs)
+    return make_fn(jax.vmap(examples.g), *xs)
 
 
 def make_Perceptron():
@@ -96,7 +95,8 @@ def make_Perceptron():
     b2 = jrand.normal(b2key, (4,))
 
     xs = (x, y, W1, b1, W2, b2, 0., 1.)
-    batched_Perceptron = jax.vmap(Perceptron, in_axes=(0, 0, None, None, None, None, None, None))
+    in_axes = (0, 0, None, None, None, None, None, None)
+    batched_Perceptron = jax.vmap(examples.Perceptron, in_axes=in_axes)
     return make_fn(batched_Perceptron, *xs)
 
 
@@ -123,10 +123,10 @@ def make_Encoder():
     b2 = jrand.normal(b2key, (2, 1))
     
     xs = (x, y, WQ1, WQ2, WK1, WK2, WV1, WV2, W1, W2, b1, b2, 0., 1., 0., 1.)
-    return make_fn(Encoder, *xs)
+    return make_fn(examples.Encoder, *xs)
 
 
 def make_BlackScholes_Jacobian():
     xs = [jnp.ones((1,)) for _ in range(5)]
-    return make_fn(jax.vmap(BlackScholes_Jacobian), *xs)
+    return make_fn(jax.vmap(examples.BlackScholes_Jacobian), *xs)
 

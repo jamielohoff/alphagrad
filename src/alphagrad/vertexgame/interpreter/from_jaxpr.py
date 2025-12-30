@@ -3,11 +3,11 @@ from typing import Callable, Sequence, Union
 import jax
 from jax._src.core import ClosedJaxpr, JaxprEqn, Literal
 
-from chex import Array
-
 from ..core import make_empty_edges, get_shape
 from .utils import add_slice
 from .prim_mapper import vertex_registry
+
+Array = jax.Array
     
 
 def filter_eqns(eqns: Sequence[JaxprEqn]) -> Sequence[JaxprEqn]:
@@ -17,7 +17,7 @@ def filter_eqns(eqns: Sequence[JaxprEqn]) -> Sequence[JaxprEqn]:
     return [eqn for eqn in eqns if not str(eqn.outvars[0]) == "_"]
 
 
-def count_eqns(eqns: Sequence[JaxprEqn]) -> Sequence[JaxprEqn]:
+def count_eqns(eqns: Sequence[JaxprEqn]) -> int:
     """
     Function that unrolls "pjit" to count the number of equations in a jaxpr.
     """
@@ -26,6 +26,7 @@ def count_eqns(eqns: Sequence[JaxprEqn]) -> Sequence[JaxprEqn]:
         if not str(eqn.outvars[0]) == "_":
             if eqn.primitive.name == "pjit":
                 subeqns = unroll_pjit(eqn)
+                # TODO(jamielohoff): this needs to be reworked.
                 filtered_eqns.extend(subeqns)
             else:
                 filtered_eqns.append(eqn)
@@ -52,7 +53,25 @@ def unroll_pjit(eqn: JaxprEqn) -> Sequence[JaxprEqn]:
 
 def make_graph(f_jaxpr: Union[ClosedJaxpr, Callable], *xs: Array) -> Array:
     """
-    Function that creates a computational graph from a JAX input function or a jaxpr.
+    Function that creates a computational graph from a JAX input function or a 
+    jaxpr. Every JaxprEqn instance is converted into a vertex in the 
+    computational graph epresentation. The input variables of the eqn object are
+    correspond to input edges and the output variables correspond to output.
+    A function can have multiple output edges if its output is used as an input
+    in multiple different functions.
+    
+    The function outputs a 3d tensor that contains a representation of the 
+    computational graph as a extended adjacency matrix. The second and third 
+    dimension of the tensor represent the edge connectivity while the first
+    dimension stores information about the sparsity of the Jacobian associated
+    with the respective edge.
+    
+    Args:
+    	f_jaxpr: Python callable or Jaxpr.
+		xs (Any): Input of the function in question.
+
+	Returns:
+		Array: Computational graph stored as and extended adjacency matrix.
     """
     jaxpr = jax.make_jaxpr(f_jaxpr)(*xs) if isinstance(f_jaxpr, Callable) else f_jaxpr
             
@@ -69,14 +88,14 @@ def make_graph(f_jaxpr: Union[ClosedJaxpr, Callable], *xs: Array) -> Array:
     is_invar_list = []
     
     # Processing input variables    
-    variables = {}
+    variables = dict()
     counter = 1
     for invar in jaxpr.jaxpr._invars:
         variables[str(invar)] = counter
         counter += 1
 
     # Process intermediate variables
-    for i, eqn in enumerate(eqns, start=1):
+    for eqn in eqns:
         is_invar_list.extend(eqn.invars)
         # Ignore calculation with just literals, i.e. constant values
         for outvar in eqn.outvars:
@@ -89,7 +108,6 @@ def make_graph(f_jaxpr: Union[ClosedJaxpr, Callable], *xs: Array) -> Array:
                 counter += 1
                         
         # Resolves primitive and adds it to the edge representation matrix
-        # print(i, eqn.outvars[0])
         add_vertex_fn = vertex_registry[eqn.primitive]
         edges = add_vertex_fn(edges, eqn, variables, **eqn.params)      
      

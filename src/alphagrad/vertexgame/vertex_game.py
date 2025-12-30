@@ -4,13 +4,10 @@ import jax
 import jax.lax as lax
 import jax.numpy as jnp
 
-from chex import Array
-
-from .core import (vertex_eliminate, 
-                    get_elimination_order, 
-                    get_vertex_mask, 
+from .core import (vertex_eliminate, get_elimination_order, get_vertex_mask, 
                     get_shape)
     
+Array = jax.Array
 
 EnvOut = Tuple[Array, float, bool, Any]
     

@@ -15,9 +15,6 @@ import jax
 import jax.lax as lax
 import jax.numpy as jnp
 
-from chex import Array
-
-
 """
 Documentation of the sparsity types:
 --------------------------------------
@@ -281,6 +278,7 @@ ADD_SPARSITY_MAP = jnp.array([[-10,  7,  1,  7,  1,  5,  4,  1,  1,-10,-10,  1, 
                               [  1,  1,  1,  1,  1,  1,  1,  1,  1, 11, 11,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1, 11]]) #  11
 
 
+Array = jax.Array
 Edge = Tuple[int, int]
 
 

@@ -22,7 +22,7 @@ Similarly, the AlphaGrad package itself has to be installed by executing
 
 ## Usage
 To start a run of the RL algorithm, use the following command.
-`CUDA_VISIBLE_DEVICES=0,1,2,3 vertex_A0.py --task RoeFlux_1d --name test --seed 123`
+`CUDA_VISIBLE_DEVICES=0,1,2,3 python vertex_A0.py --task RoeFlux_1d --name test --seed 123`
 The **config** subfolder contains .yaml files to configure the hyperparameters
 of the experiments.
 Similarly, you can run the experiments of `separate_models_vertex_ppo.py` and

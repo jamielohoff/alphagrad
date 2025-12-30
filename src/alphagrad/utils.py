@@ -1,30 +1,31 @@
-from typing import Callable, Tuple
-import functools as ft
+from typing import Any, Sequence, Tuple
+from functools import partial
+from importlib import import_module
 
 import jax
 import jax.nn as jnn
-import jax.lax as lax
 import jax.numpy as jnp
-import jax.random as jrand
 import jax.tree_util as jtu
 
-from chex import Array, PRNGKey
 import optax
 import equinox as eqx
+
+Array = jax.Array
+PRNGKey = jax.random.PRNGKey
 
 
 # Taken from https://openreview.net/forum?id=r1lyTjAqYX
 def symlog(x: float) -> float:
-    return jnp.sign(x)*jnp.log(jnp.abs(x)+1)
+    return jnp.sign(x) * jnp.log(jnp.abs(x) + 1)
 
 
 def symexp(x: float) -> float:
-    return jnp.sign(x)*jnp.exp(jnp.abs(x)-1)  
+    return jnp.sign(x) * jnp.exp(jnp.abs(x) - 1)  
 
 
 # Taken from https://arxiv.org/pdf/1805.11593
 def default_value_transform(x: Array, eps: float = 0.001) -> Array:
-    return jnp.sign(x)*(jnp.sqrt(jnp.abs(x)+1)-1) + eps*x
+    return jnp.sign(x) * (jnp.sqrt(jnp.abs(x) + 1) - 1) + eps * x
 
 
 def default_inverse_value_transform(x: Array, eps: float = 0.001) -> Array:
@@ -33,25 +34,37 @@ def default_inverse_value_transform(x: Array, eps: float = 0.001) -> Array:
 
 # Definition of some RL metrics for diagnostics
 def explained_variance(value, empirical_return) -> float:
-    return 1. - jnp.var(value)/jnp.var(empirical_return)
+    return 1. - jnp.var(value) / jnp.var(empirical_return)
 
 
 # Function to calculate the entropy of a probability distribution
 def entropy(prob_dist: Array) -> float:
-    return -jnp.sum(prob_dist*jnp.log(prob_dist + 1e-7), axis=-1)
+    return -jnp.sum(prob_dist * jnp.log(prob_dist + 1e-7), axis=-1)
+
+id = lambda x: x
+
+def get_value_tf(name: str):
+	if name == "log":
+		# Stolen from DreamerV3
+		return symlog, symexp
+	elif name == "default":
+		# Stolen from R2D2
+		return default_value_transform, default_inverse_value_transform
+	else:
+		return id, id
 
 
-@ft.partial(jax.vmap, in_axes=(None, None, None, 0, 0, 0, None, None, None, 0))
-def A0_loss_fn(value_transform,
-				inverse_value_transform,
-    			network, 
-				policy_target,
-				value_target,
-				state,
-				value_weight,
-				L2_weight,
-				entropy_weight,
-				key: PRNGKey):
+@partial(jax.vmap, in_axes=(None, None, None, 0, 0, 0, None, None, None, 0))
+def A0_loss_fn(
+    value_transform,
+	inverse_value_transform,
+    network, 
+	policy_target,
+    value_target,
+	state,
+	value_weight,
+	key: PRNGKey
+) -> Tuple[float, Any]:
 	"""Loss function as defined in AlphaZero paper with additional entropy
 	regularization to promote exploration.
 
@@ -85,42 +98,43 @@ def A0_loss_fn(value_transform,
 	# Computing the L2 regularization
 	params = eqx.filter(network, eqx.is_array)
 	squared_sums = jtu.tree_map(lambda x: jnp.sum(jnp.square(x)), params)
-	L2_loss = jtu.tree_reduce(lambda x, y: x+y, squared_sums)
+	l2_loss = jtu.tree_reduce(lambda x, y: x+y, squared_sums)
  
 	# Computing the explained variance
 	explained_var = explained_variance(value, value_target)
  
 	loss = policy_loss 
 	loss += value_weight*value_loss 
-	aux = jnp.stack((policy_loss, 
-                	value_weight*value_loss, 
-                 	L2_weight*L2_loss, 
-					entropy,
-                   	explained_var))
+	aux = jnp.stack((
+    	policy_loss, 
+		value_weight*value_loss, 
+		l2_loss, 
+		entropy,
+		explained_var
+	))
 	return loss, aux
 
 
 
-def A0_loss(value_transform,
-			inverse_value_transform,
-    		network, 
-            policy_target, 
-            value_target,
-            state, 
-            value_weight,
-            L2_weight,
-            entropy_weight,
-            keys):
-	loss, aux =  A0_loss_fn(value_transform,
-							inverse_value_transform,
-    						network, 
-							policy_target, 
-							value_target, 
-							state,
-							value_weight,
-							L2_weight,
-							entropy_weight,
-							keys)
+def A0_loss(
+    value_transform,
+	inverse_value_transform,
+    network, 
+    policy_target, 
+    value_target,
+    state, 
+    value_weight,
+    keys):
+	loss, aux = A0_loss_fn(
+    	value_transform,
+		inverse_value_transform,
+		network, 
+		policy_target, 
+		value_target, 
+		state,
+		value_weight,
+		keys
+	)
 	return loss.mean(), aux.mean(axis=0)
 
 
@@ -130,7 +144,7 @@ def get_masked_logits(logits, state):
 	return jnp.where(mask == 0, logits, jnp.finfo(logits.dtype).min)
 
 
-@ft.partial(jax.vmap, in_axes=(0,))
+@partial(jax.vmap, in_axes=(0,))
 def postprocess_data(data: Array) -> Array:
 	"""Reverses the partial cumulative reward.
 
@@ -154,5 +168,33 @@ def make_init_state(graph: Array, key: PRNGKey) -> Tuple:
 		Tuple: Initial state for the tree search.
 	"""
 	batchsize = graph.shape[0]
-	return (graph, jnp.zeros(batchsize), key)  
+	return (graph, jnp.zeros(batchsize), key)
+
+
+def task_builder(task: str):
+    """Importing the `make_XXX` function of the task and creating the graph
+    """
+    package = "alphagrad.experiments"
+    module = import_module(package)
+    
+    task_fn_name = "make_" + task
+    make_fn = getattr(module, task_fn_name)
+    graph, graph_shape, task_fn = make_fn()
+    return graph, graph_shape, task_fn
+
+
+def joint_task_builder(task_names: Sequence[str]):
+    package = "alphagrad.experiments"
+    module = import_module(package)
+    
+    graphs, graph_shapes, task_fns = [], [], []
+  
+    for task_fn_name in task_names:
+        print(f"task: {task_fn_name}")
+        make_fn = getattr(module, "make_" + task_fn_name)
+        graph, graph_shape, task_fn = make_fn()
+        graphs.append(graph)
+        graph_shapes.append(graph_shape)
+        task_fns.append(task_fn)
+    return graphs, graph_shapes, task_fns
 
