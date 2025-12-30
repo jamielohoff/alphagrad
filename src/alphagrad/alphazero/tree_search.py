@@ -1,4 +1,4 @@
-from typing import Callable, Sequence
+from typing import Any, Callable
 from functools import partial
 
 import jax
@@ -7,21 +7,22 @@ import jax.numpy as jnp
 import jax.random as jrand
 import jax.tree_util as jtu
 
-from chex import PyTreeDef
 import mctx
 import equinox as eqx
 
-from ..utils import symexp
-
+PyTreeDef = Any
 
 # Preconfigured functions for tree search
-select_params = lambda x, y: y if eqx.is_inexact_array(x) else x
+select_params = lambda x, y: y if eqx.is_inexact_array(x) else x   
 
-def make_recurrent_fn(value_transform: Callable,
-                    inverse_value_transform: Callable,
-                    network: PyTreeDef,
-                    step: Callable,
-                    get_masked_logits: Callable) -> Callable:
+
+def make_recurrent_fn(
+    value_transform: Callable,
+    inverse_value_transform: Callable,
+    network: PyTreeDef,
+    step: Callable,
+    get_masked_logits: Callable
+) -> Callable:
     """Implementation of the recurrent function for tree searchas required by
     the MuZero algorithm. The recurrent function is used to expand the tree
     at the leaf node with a new node. The initial action probabilities will be
@@ -60,24 +61,25 @@ def make_recurrent_fn(value_transform: Callable,
         # The initial action probabilities will be biased with the prediction
         # from the neural network
         # On a single-player environment, use discount from [0, 1].
-        recurrent_fn_output = mctx.RecurrentFnOutput(reward=reward,
-                                                    discount=1.,
-                                                    prior_logits=masked_logits,
-                                                    value=value)
+        recurrent_fn_output = mctx.RecurrentFnOutput(
+            reward=reward, discount=1., prior_logits=masked_logits, value=value
+        )
         return recurrent_fn_output, next_states
     
     return recurrent_fn
 
 
-def make_environment_interaction(value_transform: Callable,
-                                inverse_value_transform: Callable,
-                                num_actions: int,
-                                num_considered_actions: int,
-                                gumbel_scale: int,
-                                num_simulations: int,
-                                recurrent_fn: Callable,
-                                step: Callable,
-                                **kwargs) -> Callable:
+def make_environment_interaction(
+    value_transform: Callable,
+    inverse_value_transform: Callable,
+    num_actions: int,
+    num_considered_actions: int,
+    gumbel_scale: int,
+    num_simulations: int,
+    recurrent_fn: Callable,
+    step: Callable,
+    **kwargs
+) -> Callable:
     """Implementation of the environment interaction function for the MuZero
     algorithm. The environment interaction function is used to simulate the
     environment and the agent's interaction with the environment. The agent
@@ -120,29 +122,26 @@ def make_environment_interaction(value_transform: Callable,
             value = inverse_value_transform(output[:, 0])
 
             # Configuring root node of the tree search
-            # jax.debug.print("policy_logits={policy_logits}", policy_logits=policy_logits[0])
-            root = mctx.RootFnOutput(prior_logits=policy_logits, 
-                                    value=value, 
-                                    embedding=states)
+            treesearch_root = mctx.RootFnOutput(
+                prior_logits=policy_logits, value=value, embedding=states
+            )
                                     
             # Gumbel MuZero is so much better!
             # Smaller Gumbel noise helps improve performance, but too small kills learning
-            policy_output = mctx.gumbel_muzero_policy(params,
-                                                    subkey,
-                                                    root,
-                                                    recurrent_fn,
-                                                    num_simulations,
-                                                    invalid_actions=mask,
-                                                    qtransform=qtransform,
-                                                    gumbel_scale=gumbel_scale,
-                                                    max_num_considered_actions=num_considered_actions)
+            policy_output = mctx.gumbel_muzero_policy(
+                params,
+                subkey,
+                treesearch_root,
+                recurrent_fn,
+                num_simulations,
+                invalid_actions=mask,
+                qtransform=qtransform,
+                gumbel_scale=gumbel_scale,
+                max_num_considered_actions=num_considered_actions
+            )
 
             # Tree search derived targets for policy and value function
             search_policy = policy_output.action_weights
-            # jax.debug.print("search_policy={search_policy}", search_policy=search_policy[0])
-            # search_value = policy_output.search_tree.qvalues(jnp.full(batchsize, policy_output.search_tree.ROOT_INDEX))[jnp.arange(batchsize), policy_output.action]
-            # search_value = policy_output.search_tree.node_values[:, policy_output.search_tree.ROOT_INDEX]
-            # jax.debug.print("search_value={search_value}", search_value=search_value)
             
             # Always take action recommended by tree search because for this
             # action, the gumbel method guarantees a policy improvement
@@ -158,13 +157,18 @@ def make_environment_interaction(value_transform: Callable,
             
             # Package up everything for further processing
             state_flattened = state.reshape(batchsize, -1)
-            return (next_states, num_muls, key), jnp.concatenate([state_flattened,
-                                                                search_policy, 
-                                                                rewards[:, jnp.newaxis], 
-                                                                value[:, jnp.newaxis],
-                                                                # search_value[:, jnp.newaxis],
-                                                                done[:, jnp.newaxis]], 
-                                                                axis=1)
+            
+            aux = jnp.concatenate([
+                state_flattened,
+                search_policy, 
+                rewards[:, jnp.newaxis], 
+                value[:, jnp.newaxis],
+                # search_value[:, jnp.newaxis],
+                done[:, jnp.newaxis]], 
+                axis=1
+            )
+            
+            return (next_states, num_muls, key), aux
 
         perf, output = lax.scan(loop_fn, init_carry, None, length=num_actions)
         final_state = perf[0][:, -5:]

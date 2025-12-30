@@ -17,10 +17,10 @@ import equinox as eqx
 
 from tqdm import tqdm
 
-from alphagrad.config import setup_joint_experiment
+from alphagrad.builder import setup_joint_experiment
 from alphagrad.vertexgame import step, embed
 from alphagrad.utils import A0_loss, get_masked_logits, symlog, symexp
-from alphagrad.alphazero.environment_interaction import (make_recurrent_fn,
+from alphagrad.alphazero.tree_search import (make_recurrent_fn,
 														make_environment_interaction)
 from alphagrad.transformer.models import AlphaZeroModel
 
