@@ -1,10 +1,7 @@
-import os
-import wandb
 import time
-from functools import partial, reduce
+from functools import partial
 
 import jax
-import jax.nn as jnn
 import jax.lax as lax
 import jax.numpy as jnp
 import jax.random as jrand
@@ -14,11 +11,13 @@ import flashbax as fbx
 import optax
 import equinox as eqx
 
+import wandb
 import hydra
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 from tqdm import tqdm
 
 import alphagrad.utils as u
+import alphagrad.sharding_utils as shu
 from alphagrad.experiments import make_benchmark_scores
 from alphagrad.vertexgame import step
 import alphagrad.alphazero.tree_search as ts
@@ -27,23 +26,23 @@ from alphagrad.transformer.models import AlphaZeroModel
 
 @hydra.main(version_base=None, config_path="config", config_name="Encoder.yaml")
 def alphazero_experiment(cfg: DictConfig) -> None:
-	os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-	os.environ["CUDA_VISIBLE_DEVICES"] = cfg.gpus
 	key = jrand.PRNGKey(cfg.seed)
 
 	print("CPU devices:", jax.devices("cpu"))
 	print("GPU devices:", jax.devices("gpu"))
 
-	# TODO: this needs fixing
+	# Build task and create scores with off-the-shelf benchmarks such as 
+	# reverse-mode AD
 	graph, graph_shape, task_fn = u.task_builder(cfg.task)
 	mM_order, scores = make_benchmark_scores(graph)
-	print(f"Graph shape: {graph.shape}")
+	print(f"graph shape: {graph.shape}")
 
-	PER_DEVICE_NUM_ENVS = cfg.rl.num_envs // jax.device_count("gpu")
-	PER_DEVICE_BATCHSIZE = cfg.rl.batch_size // jax.device_count("gpu")
+	NUM_DEVICES = jax.device_count("gpu")
+	PER_DEVICE_NUM_ENVS = cfg.rl.num_envs // NUM_DEVICES
+	PER_DEVICE_BATCHSIZE = cfg.rl.batch_size // NUM_DEVICES
  
 	ROLLOUT_LENGTH = int(graph.shape[2] - graph_shape[2])
-	OBS_SHAPE = reduce(lambda x, y: x*y, graph.shape)
+	OBS_SHAPE = shu.prod(graph.shape)
 	NUM_ACTIONS = graph.shape[-1]
  
 	run_config = {
@@ -69,81 +68,72 @@ def alphazero_experiment(cfg: DictConfig) -> None:
 	key, model_key, init_key = jrand.split(key, 3)
 	model = AlphaZeroModel(graph_shape, key=model_key, **cfg.rl.agent)
 
-	init_fn = jnn.initializers.truncated_normal(0.02)
+	# init_fn = jnn.initializers.truncated_normal(0.02)
+	# TODO(jamielohoff): used orthogonal init in the past...check if the whole
+	# thing works without that!
 
-	def init_weight(model, init_fn, key):
-		is_linear = lambda x: isinstance(x, eqx.nn.Linear)
-		get_weights = lambda m: [x.weight
-								for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
-								if is_linear(x)]
-		get_biases = lambda m: [x.bias
-								for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
-								if is_linear(x) and x.bias is not None]
-		weights = get_weights(model)
-		biases = get_biases(model)
+	# # NOTE: this is terribly unwieldy! flax does this a lot better!
+	# def init_weight(model, init_fn, key):
+	# 	is_linear = lambda x: isinstance(x, eqx.nn.Linear)
+	# 	get_weights = lambda m: [x.weight
+	# 							for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
+	# 							if is_linear(x)]
+	# 	get_biases = lambda m: [x.bias
+	# 							for x in jax.tree_util.tree_leaves(m, is_leaf=is_linear)
+	# 							if is_linear(x) and x.bias is not None]
+	# 	weights = get_weights(model)
+	# 	biases = get_biases(model)
 		
-		it = zip(weights, jax.random.split(key, len(weights)))
-		new_weights = [init_fn(subkey, weight.shape) for weight, subkey in it]
+	# 	it = zip(weights, jax.random.split(key, len(weights)))
+	# 	new_weights = [init_fn(subkey, weight.shape) for weight, subkey in it]
 		
-		new_biases = [jnp.zeros_like(bias) for bias in biases]
-		new_model = eqx.tree_at(get_weights, model, new_weights)
-		new_model = eqx.tree_at(get_biases, new_model, new_biases)
+	# 	new_biases = [jnp.zeros_like(bias) for bias in biases]
+	# 	new_model = eqx.tree_at(get_weights, model, new_weights)
+	# 	new_model = eqx.tree_at(get_biases, new_model, new_biases)
 		
-		return new_model
+	# 	return new_model
 
-	# Initialization could help with performance
-	model = init_weight(model, init_fn, init_key)
+	# # Initialization could help with performance
+	# model = init_weight(model, init_fn, init_key)
 	value_transform, inverse_value_transform = u.get_value_tf(cfg.rl.value_transform)
 
-
+	# TODO(jamielohoff): make this into one function! 
 	# Setup of the necessary functions for the tree search
-	recurrent_fn = ts.make_recurrent_fn(
-		value_transform, inverse_value_transform, model, step, u.get_masked_logits
-	)
-	env_interaction = ts.make_environment_interaction(
-		value_transform,
-		inverse_value_transform,
-		ROLLOUT_LENGTH, 
-		recurrent_fn,
+	tree_search_fn = ts.make_tree_search(
+		model,
 		step,
+		ROLLOUT_LENGTH, 
+		inverse_value_transform,
 		**cfg.rl.tree_search
 	)
 
-	# Setup loss function
-	loss_fn = partial(u.A0_loss, value_transform, inverse_value_transform)
-
+	# Tree search init
 	def make_init_carry(graph, key):
-		graphs = jnp.tile(graph[jnp.newaxis, ...], (PER_DEVICE_NUM_ENVS, cfg.rl.lookback, 1, 1))
+		tiling = (PER_DEVICE_NUM_ENVS, cfg.rl.lookback, 1, 1)
+		graphs = jnp.tile(graph[jnp.newaxis, ...], tiling)
 		return (graphs, jnp.zeros(PER_DEVICE_NUM_ENVS), key)
 
-
 	# Tree search function
+	@partial(eqx.filter_jit, donate="all")
+	@partial(jax.vmap, in_axes=(None, None, 0))
 	def tree_search(graph, model, key):
 		init_carry = make_init_carry(graph, key)
-		final_state, num_muls, data = env_interaction(model, init_carry)
+		final_state, num_muls, data = tree_search_fn(model, init_carry)
 		return final_state, num_muls, data # postprocess_data(data)
 
-	# TODO: pmap is deprecated and needs to be reworked!
-	pmap_tree_search = eqx.filter_pmap(
-		tree_search, 
-		in_axes=(None, None, 0), 
-		axis_name="num_devices", 
-		devices=jax.devices("gpu"), 
-		donate="all"
-	)
-
 	# Initialization of the optimizer
-	# TODO implement proper schedule because dips in the best_return cause model to
-	# break after a number of epochs
-	lr_schedule = optax.cosine_decay_schedule(cfg.rl.lr, cfg.rl.episodes) # LR
+	# TODO(jamielohoff): implement proper schedule because dips in the 
+	# best_return cause model to break after a number of epochs
+	lr_schedule = optax.cosine_decay_schedule(cfg.rl.lr, cfg.rl.episodes)
 	optim = optax.chain(
-		optax.adamw(lr_schedule, weight_decay=cfg.rl.wd), optax.clip_by_global_norm(1.)
+		optax.adamw(lr_schedule, weight_decay=cfg.rl.wd),
+		optax.clip_by_global_norm(1.)
 	)
 	opt_state = optim.init(eqx.filter(model, eqx.is_inexact_array))
 
 
 	# Needed to reassemble data
-	state_shape = (5, graph_shape[0]+NUM_ACTIONS+1, NUM_ACTIONS)
+	state_shape = (5, int(graph_shape[0])+NUM_ACTIONS+1, NUM_ACTIONS)
 	state_idx = jnp.prod(jnp.array(state_shape))
 	policy_idx = state_idx + NUM_ACTIONS
 	reward_idx = int(policy_idx + 1)
@@ -161,7 +151,7 @@ def alphazero_experiment(cfg: DictConfig) -> None:
 		period=1
 	)
 
-	item_prototype =jnp.zeros(value_idx+2, device=jax.devices("cpu")[0])
+	item_prototype = jnp.zeros(value_idx+2, device=jax.devices("cpu")[0])
 
 
 	# Fill the replay buffer
@@ -171,7 +161,6 @@ def alphazero_experiment(cfg: DictConfig) -> None:
 
 
 	fill_buf = partial(fill_buffer, replay_buffer)
-	sample_fn = replay_buffer.sample
 
 
 	@partial(jax.jit, donate_argnums=1)
@@ -180,10 +169,10 @@ def alphazero_experiment(cfg: DictConfig) -> None:
 		buffer_states = fill_buf(buffer_states, data)
 
 		# Sample from replay buffer
-		samples = sample_fn(buffer_states, key)
+		samples = replay_buffer.sample(buffer_states, key)
 		samples = samples.experience
 		samples = samples.reshape(
-			jax.device_count("gpu"), PER_DEVICE_BATCHSIZE, cfg.rl.lookback, -1
+			NUM_DEVICES, PER_DEVICE_BATCHSIZE, cfg.rl.lookback, -1
 		)
 		return samples, buffer_states
 
@@ -198,7 +187,7 @@ def alphazero_experiment(cfg: DictConfig) -> None:
 	def compute_value_targets(data):
 		def loop_fn(returns, reward):
 			val = reward + cfg.rl.discount*returns
-			return (val,), val
+			return val, val
 
 		rewards = data[:, -3].flatten()
 		_, returns = lax.scan(loop_fn, 0., rewards[::-1])
@@ -214,63 +203,76 @@ def alphazero_experiment(cfg: DictConfig) -> None:
 		best_act_seq = act_seqs[jnp.argmax(num_muls).astype(jnp.int32)]
 		return best_num_muls, best_act_seq
 
+	# Setup loss function
+	loss_fn = partial(u.A0_loss, value_transform)
 
-	# Defining the training function
-	select_first = lambda x: x[0] if isinstance(x, jax.Array) else x
-	parallel_mean = lambda x: lax.pmean(x, "num_devices")
-
-	# TODO(jamielohoff): rewrite this using the sharding API
-	@partial(eqx.filter_pmap, 
-			in_axes=(0, None, None, 0), 
-			axis_name="num_devices", 
-			devices=jax.devices("gpu"), 
-			donate="all"
-	)
-	def train_agent(data, model, opt_state, key):
+	# data and key need batch parallelism for agent training
+	# TODO(jamielohoff): maybe we can make this more elegant with a shard_map?
+	@partial(eqx.filter_jit, donate="all")
+	def train_agent(model, opt_state, data, key):
 		out = jnp.split(data, split_idxs, axis=-1)
-		state, search_policy, search_rewards, search_value, done, search_target = out
+		state, ts_policy, _, _, _, ts_target = out
 		state = state.reshape(
-      		PER_DEVICE_BATCHSIZE, 5*cfg.rl.lookback, *state_shape[1:]
+      		NUM_DEVICES, PER_DEVICE_BATCHSIZE, 5*cfg.rl.lookback, *state_shape[1:]
         )
+		ts_policy, ts_target = ts_policy[..., -1], ts_target[..., -1]
 
-		subkeys = jrand.split(key, PER_DEVICE_BATCHSIZE)
+		@partial(jax.vmap, in_axes=(None, 0, 0, 0, 0))
+		def per_device_grads(model, ts_policy, ts_target, state, key):
+			keys = jrand.split(key, PER_DEVICE_BATCHSIZE)
+			return eqx.filter_value_and_grad(loss_fn, has_aux=True)(
+				model, ts_policy, ts_target, state, cfg.rl.value_weight, keys
+			)
+			
+		val, grads = per_device_grads(model, ts_policy, ts_target, state, key)
 
-		val, grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
-			model, search_policy[:, -1], search_target[:, -1], state, cfg.rl.value_weight, subkeys
-		)
 		loss, aux = val
-		loss = lax.pmean(loss, axis_name="num_devices")
-		aux = lax.pmean(aux, axis_name="num_devices")
-		grads = jtu.tree_map(parallel_mean, grads)
+		loss = jnp.mean(loss, axis=0)
+		aux = jnp.mean(aux, axis=0)
+		grads = jtu.tree_map(u.parallel_mean, grads)
 
 		updates, opt_state = optim.update(
 			grads, opt_state, params=eqx.filter(model, eqx.is_inexact_array)
 		)
+		print(grads, updates, opt_state)
 		model = eqx.apply_updates(model, updates)
 		return loss, aux, model, opt_state
 
 
-	# Training loop
+	# training loop
 	pbar = tqdm(range(cfg.rl.episodes))
-	print("Scores:", scores)
-	print("Minimal Markowitz Order:", [int(o) for o in mM_order])
+	print("scores:", scores)
+	print("minimal Markowitz order:", [int(o) for o in mM_order])
 	best_global_num_muls = jnp.max(-jnp.array(scores))
-	best_global_act_seq = None
 
 	buffer_state = replay_buffer.init(item_prototype)
-	elim_order_table = wandb.Table(columns=["episode", "return", "elimination order"])
+
+	# generate sharding for batch parallelism
+	batch_sharding = lambda shape: shu.get_sharding(
+    	shape, 
+    	axes=0,
+    	axes_names="batch",
+		num_devices=NUM_DEVICES
+    )
 
 	# training loop
-	for episode in pbar:
-		data_key, train_key, sample_key, key = jrand.split(key, 4)
-		data_keys = jrand.split(data_key, jax.device_count("gpu"))
-		train_keys = jrand.split(train_key, jax.device_count("gpu"))
+	for ep in pbar:
+		ts_key, train_key, sample_key, key = jrand.split(key, 4)
+
+		# shard random keys for automatic batch parallelism.
+		# model and graph object are automatically replicated by JIT compiler
+		train_keys = jrand.split(train_key, NUM_DEVICES)
+		ts_keys = jrand.split(ts_key, NUM_DEVICES)
+  
+		key_sharding = batch_sharding(ts_keys.shape)
+		ts_keys = jax.device_put(ts_keys, key_sharding)
+		train_keys = jax.device_put(train_keys, key_sharding)
 
 		start_time = time.time()
-		final_state, num_muls, data = pmap_tree_search(graph, model, data_keys)
+		final_state, num_muls, data = tree_search(graph, model, ts_keys)
 		print("tree search time", time.time() - start_time)
 
-		# Device transfer
+		# device transfer
 		data = jax.device_get(data)
 		data = data.reshape(cfg.rl.num_envs, ROLLOUT_LENGTH, -1)
 		data = compute_value_targets(data)
@@ -281,24 +283,31 @@ def alphazero_experiment(cfg: DictConfig) -> None:
 
 		if best_num_muls > best_global_num_muls:
 			best_global_num_muls = best_num_muls
-			best_global_act_seq = best_act_seq
-			print(f"New best return: {best_num_muls}")
+			print(f"new best return: {best_num_muls}")
 			vertex_elimination_order = [int(i) for i in best_act_seq]
-			print(f"New best action sequence: {vertex_elimination_order}")
-			# elim_order_table.add_data(episode, best_return, np.array(best_act_seq))
+			print(f"new best action sequence: {vertex_elimination_order}")
 
+		# fill sample buffer and sample new training data
 		samples, buffer_state = fill_and_sample(data, buffer_state, sample_key)
+  
+		# shard the samples for parallel training
+		data_sharding = batch_sharding(samples.shape)
+		samples = jax.device_put(samples, data_sharding)
 		
 		start_time = time.time()
 		losses, aux, models, opt_states = train_agent(
-			samples, model, opt_state, train_keys
+			model, opt_state, samples, train_keys
 		)
 		print("training time", time.time() - start_time)	
 
-		loss = losses[0]
-		aux = aux[0]
-		model = jtu.tree_map(select_first, models, is_leaf=eqx.is_inexact_array)
-		opt_state = jtu.tree_map(select_first, opt_states, is_leaf=eqx.is_inexact_array)
+		loss, aux = losses[0], aux[0]
+  
+		# NOTE: this here could be a major bottleneck. PLS benchmark
+		# we should just fix this so that we do not need these weird commands...
+		model = jtu.tree_map(u.select_first, models, is_leaf=eqx.is_inexact_array)
+		opt_state = jtu.tree_map(
+			u.select_first, opt_states, is_leaf=eqx.is_inexact_array
+		)
 
 		wandb.log({"total loss": loss.tolist(),
 					"policy loss": aux[0].tolist(),

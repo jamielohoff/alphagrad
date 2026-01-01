@@ -1,0 +1,4 @@
+- task=f
+- name=test
+- seed=123
+- wandb_mode=offline

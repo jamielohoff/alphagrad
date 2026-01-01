@@ -2,14 +2,14 @@ from typing import Callable, Sequence
 
 import jax
 import jax.nn as jnn
-import jax.numpy as jnp
 import jax.random as jrand
 
 import numpy as np
 import equinox as eqx
 
 Array = jax.Array
-PRNGKey = jax.random.PRNGKey
+PRNGKey = jax.Array
+
 
 class PositionalEncoder(eqx.Module):
     """
@@ -17,7 +17,7 @@ class PositionalEncoder(eqx.Module):
     """
     pe: Array
 
-    def __init__(self, in_dim: int, seq_len: int, n: int = 10_000):
+    def __init__(self, in_dim: int, seq_len: int, n: int = 10_000) -> None:
         # Create matrix of [SeqLen, TokenSize] representing the positional 
         # encoding for max_len inputs
         
@@ -28,7 +28,7 @@ class PositionalEncoder(eqx.Module):
         pe[1::2, :] = np.cos(position * div_term)
         self.pe = jax.device_put(pe)
 
-    def __call__(self, x: Array):
+    def __call__(self, x: Array) -> Array:
         return x + self.pe[:x.shape[0], :]
     
     

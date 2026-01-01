@@ -1,4 +1,4 @@
-from typing import Sequence
+from typing import Sequence, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -9,7 +9,7 @@ import equinox as eqx
 from alphagrad.transformer import Encoder, MLP, PositionalEncoder
 
 Array = jax.Array
-PRNGKey = jax.random.PRNGKey
+PRNGKey = jax.Array
 
 class GraphEmbedding(eqx.Module):
     embedding: eqx.nn.Conv2d
@@ -32,7 +32,7 @@ class GraphEmbedding(eqx.Module):
         self.projection = jrand.normal(proj_key, (conv_size, embd_dim))
         # self.output_token = jrand.normal(token_key, (num_i+num_vo, 1))
     
-    def __call__(self, graph: Array, key: PRNGKey = None) -> Array:
+    def __call__(self, graph: Array, key: PRNGKey = None) -> Tuple[Array, Array]:
         output_mask = graph.at[2, 0, :].get()
         vertex_mask = graph.at[1, 0, :].get() - output_mask
         attn_mask = jnp.logical_or(vertex_mask.reshape(1, -1), vertex_mask.reshape(-1, 1))
@@ -184,6 +184,7 @@ class AlphaZeroModel(eqx.Module):
     ) -> None:
         super().__init__()
         num_i, num_vo, num_o = graph_shape
+        num_i, num_vo = int(num_i), int(num_vo)
         embed_key, token_key, proj_key, tf_key = jrand.split(key, 4)
         kernel_size, stride = 3, 2
         self.embedding = eqx.nn.Conv2d(

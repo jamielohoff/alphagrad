@@ -1,0 +1,35 @@
+name: test
+task: f
+wandb_mode: offline
+seed: 123
+rl:
+  num_envs: 32
+  batch_size: 4096
+  episodes: 5000
+  value_weight: 10.0
+  lr: 0.001
+  wd: 0.0001
+  discount: 1.0
+  value_transform: log
+  replay_buffer_size: 50000
+  lookback: 1
+  agent:
+    embd_dim: 64
+    num_heads: 6
+    num_layers: 6
+    hidden_dim: 256
+    num_policy_layers: 2
+    policy_hidden_dims:
+    - 256
+    - 128
+    value_hidden_dims:
+    - 256
+    - 128
+    - 64
+  tree_search:
+    gumbel_scale: 1.0
+    num_considered_actions: 5
+    num_simulations: 250
+    value_scale: 0.01
+    maxvisit_init: 25
+    rescale_values: true

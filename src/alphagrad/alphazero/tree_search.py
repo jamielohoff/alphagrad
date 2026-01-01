@@ -1,4 +1,4 @@
-from typing import Any, Callable
+from typing import Any, Callable, Tuple
 from functools import partial
 
 import jax
@@ -10,33 +10,36 @@ import jax.tree_util as jtu
 import mctx
 import equinox as eqx
 
+import alphagrad.utils as u
+
+
+Array = jax.Array
 PyTreeDef = Any
+EnvStepFn = Callable[[Array, Array], Tuple[Array, float, bool]]
+ValueTransform = Callable[[float], float]
 
 # Preconfigured functions for tree search
 select_params = lambda x, y: y if eqx.is_inexact_array(x) else x   
 
 
 def make_recurrent_fn(
-    value_transform: Callable,
-    inverse_value_transform: Callable,
-    network: PyTreeDef,
-    step: Callable,
-    get_masked_logits: Callable
+    model: PyTreeDef,
+    step: EnvStepFn,
+    inverse_value_transform: ValueTransform,
 ) -> Callable:
-    """Implementation of the recurrent function for tree searchas required by
-    the MuZero algorithm. The recurrent function is used to expand the tree
-    at the leaf node with a new node. The initial action probabilities will be
-    biased with the prediction from the neural network.
-
+    """Creates a recurrent function for tree search as required by the MuZero 
+    algorithm. This function is used to expand the tree at the leaf node with a 
+    new node. The initial action probabilities are biased with the prediction 
+    from the neural network.
+    
     Args:
-        value_transform (Callable): Function to transform value for training
-        inverse_value_transform (Callable): Function to inverse transform value for prediction
-        network (chex.PyTreeDef): Neural network model
-        step (Callable): Environment dynamics function
-        get_masked_logits (Callable): Function that masks logits for invalid actions
-
+        model: Neural network model of the agent.
+        step: Environment dynamics function that takes state and action, 
+        returns next state, reward, and done flag.
+        inverse_value_transform: Function to inverse transform the value 
+        for prediction.
     Returns:
-        Callable: Recurrent function for tree search
+        A callable recurrent function for tree search node expansion.
     """
     @partial(jax.vmap, in_axes=(None, None, 0, 0))
     def recurrent_fn(params, rng_key, actions, states):
@@ -46,16 +49,16 @@ def make_recurrent_fn(
         next_states = states.at[-5:].set(next_state)
         
         # Map parameters to prediction function, i.e. neural network
-        model = jtu.tree_map(select_params, network, params)
+        _model = jtu.tree_map(select_params, model, params)
 
         # Compute policy and value for leaf node with neural network model
         # Symexp for reward scaling since value head is trained on symlog(value)
-        output = model(next_states, rng_key)
+        output = _model(next_states, rng_key)
         policy_logits = output[1:]
         value = inverse_value_transform(output[0])
         
         # Create mask for invalid actions, i.e. already eliminated vertices
-        masked_logits = get_masked_logits(policy_logits, state)
+        masked_logits = u.get_masked_logits(policy_logits, state)
 
         # Expand the tree at the leaf with a new node
         # The initial action probabilities will be biased with the prediction
@@ -69,17 +72,16 @@ def make_recurrent_fn(
     return recurrent_fn
 
 
-def make_environment_interaction(
-    value_transform: Callable,
-    inverse_value_transform: Callable,
+def make_tree_search(
+    model: PyTreeDef,
+    step: EnvStepFn,
     num_actions: int,
-    num_considered_actions: int,
-    gumbel_scale: int,
-    num_simulations: int,
-    recurrent_fn: Callable,
-    step: Callable,
-    **kwargs
-) -> Callable:
+    inverse_value_transform: ValueTransform,
+    num_considered_actions: int = 5,
+    gumbel_scale: float = 1.0,
+    num_simulations: int = 25,
+    **qtransformkwargs
+) -> Tuple[Array, int, Array]:
     """Implementation of the environment interaction function for the MuZero
     algorithm. The environment interaction function is used to simulate the
     environment and the agent's interaction with the environment. The agent
@@ -87,20 +89,25 @@ def make_environment_interaction(
     policy derived from the tree search.
     
     Args:
-        value_transform (Callable): Function to transform value for training
-        inverse_value_transform (Callable): Function to inverse transform value for prediction
-        num_actions (int): Number of actions
-        num_considered_actions (int): Number of considered actions
-        gumbel_scale (int): Gumbel scale parameter
-        num_simulations (int): Number of simulations
-        recurrent_fn (Callable): Recurrent function for tree search
-        step (Callable): Environment dynamics function
-        **kwargs: Additional keyword arguments
+        model (PyTreeDef): Neural network model of the agent. 
+        step (Callable): Environment dynamics function.
+        num_actions (int): Number of actions. Should be same as rollout length,
+        i.e. number of intermediate vertices.
+        inverse_value_transform (Callable): Function to inverse transform value 
+        for prediction.
+        num_considered_actions (int): Number of considered actions.
+        gumbel_scale (float): Gumbel scale parameter.
+        num_simulations (int): Number of simulations.
+        **qtransformkwargs: Additional keyword arguments for Q-transform.
     
     Returns:
-        Callable: Environment interaction function for the MuZero algorithm
+        A callable to create model-based RL samples for MCTS.
     """
-    qtransform = partial(mctx.qtransform_completed_by_mix_value, **kwargs)
+    qtransform = partial(
+        mctx.qtransform_completed_by_mix_value, **qtransformkwargs
+    )
+    
+    recurrent_fn = make_recurrent_fn(model, step, inverse_value_transform)
     
     def environment_interaction(network, init_carry):
         batchsize = init_carry[1].shape[0]
@@ -163,7 +170,6 @@ def make_environment_interaction(
                 search_policy, 
                 rewards[:, jnp.newaxis], 
                 value[:, jnp.newaxis],
-                # search_value[:, jnp.newaxis],
                 done[:, jnp.newaxis]], 
                 axis=1
             )

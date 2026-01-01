@@ -11,8 +11,7 @@ import optax
 import equinox as eqx
 
 Array = jax.Array
-PRNGKey = jax.random.PRNGKey
-
+PRNGKey = jax.Array
 
 # Taken from https://openreview.net/forum?id=r1lyTjAqYX
 def symlog(x: float) -> float:
@@ -41,6 +40,11 @@ def explained_variance(value, empirical_return) -> float:
 def entropy(prob_dist: Array) -> float:
     return -jnp.sum(prob_dist * jnp.log(prob_dist + 1e-7), axis=-1)
 
+
+select_first = lambda x: x[0] if isinstance(x, jax.Array) else x
+parallel_mean = lambda x: jnp.mean(x, axis=0)
+
+
 id = lambda x: x
 
 def get_value_tf(name: str):
@@ -54,10 +58,9 @@ def get_value_tf(name: str):
 		return id, id
 
 
-@partial(jax.vmap, in_axes=(None, None, None, 0, 0, 0, None, None, None, 0))
+@partial(jax.vmap, in_axes=(None, None, 0, 0, 0, None, 0))
 def A0_loss_fn(
     value_transform,
-	inverse_value_transform,
     network, 
 	policy_target,
     value_target,
@@ -65,26 +68,21 @@ def A0_loss_fn(
 	value_weight,
 	key: PRNGKey
 ) -> Tuple[float, Any]:
-	"""Loss function as defined in AlphaZero paper with additional entropy
-	regularization to promote exploration.
+	"""Loss function as defined in AlphaZero paper.
 
 	Args:
 		value_transform (Callable): Value transform function.
-		inverse_value_transform (Callable): Inverse value transform function.
 		network (Array): Transformer policy and value model.
 		policy_target (Array): Policy targets computed in the tree search.
 		value_target (Array): Value targets computed in the tree search.
 		state (Array): States from the environment.
-		policy_weight (Array): Weight of the policy loss.
-		L2_weight (Array): Weight of the L2 regularization.
-		entropy_weight (Array): Weight of the entropy regularization.
+		value_weight (Array): Weight of the value function loss.
 		key (PRNGKey): Random key.
 	Returns:
 		Tuple: Returns loss function and auxiliary metrics.
 	"""
 	output = network(state, key=key)
-	policy_logits = output[1:]
-	value = output[0]
+	value, policy_logits = output[0], output[1:]
 
 	policy_probs = jnn.softmax(policy_logits, axis=-1)
 
@@ -115,19 +113,17 @@ def A0_loss_fn(
 	return loss, aux
 
 
-
 def A0_loss(
     value_transform,
-	inverse_value_transform,
     network, 
     policy_target, 
     value_target,
     state, 
     value_weight,
-    keys):
+    keys
+):
 	loss, aux = A0_loss_fn(
     	value_transform,
-		inverse_value_transform,
 		network, 
 		policy_target, 
 		value_target, 

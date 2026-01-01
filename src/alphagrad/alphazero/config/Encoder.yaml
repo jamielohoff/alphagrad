@@ -1,11 +1,10 @@
 name: "test"
 task: "Encoder"
 wandb_mode: "online"
-gpus: "0,1,2,3"
 seed: 250197
 
 rl:
-  num_envs: 32 # this needs to be much larger probably
+  num_envs: 16 # this needs to be much larger probably
   batch_size: 4096
   episodes: 5000
   value_weight: 10.
@@ -28,7 +27,7 @@ rl:
   tree_search:
     gumbel_scale: 1.0
     num_considered_actions: 5
-    num_simulations: 250
+    num_simulations: 10
 
     # qtransform params
     value_scale: 0.01

@@ -8,7 +8,7 @@ import jax.random as jrand
 import equinox as eqx
 
 Array = jax.Array
-PRNGKey = jax.random.PRNGKey
+PRNGKey = jax.Array
 
 
 def _find_multiple(a: int, b: int) -> int:
