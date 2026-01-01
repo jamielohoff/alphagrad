@@ -58,6 +58,7 @@ MANIFEST
 **/__pycache__/
 **/checkpoints/
 **/data/
+**/outputs/
 
 *.hdf5
 *.h5
